@@ -1,8 +1,16 @@
-# MolForge
+<div align="center">
+  <img src="logo.png" alt="MolForge Logo" width="400"/>
 
-**Status: Public Beta** 🚧
+  # MolForge
 
-A configurable pipeline for molecular data processing, curation, and conformer generation.
+  **A configurable pipeline for molecular data processing, curation, and conformer generation**
+
+  [![Status](https://img.shields.io/badge/status-public%20beta-orange)](https://github.com/molML/molforge)
+  [![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
+</div>
+
+---
 
 ## Overview
 
