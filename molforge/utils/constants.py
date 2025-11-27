@@ -19,6 +19,9 @@ except ImportError:
     HAS_OPENEYE = False
     oechem = None
 
+# Export for centralized import management
+__all__ = ['HAS_OPENEYE', 'oechem', 'DEFAULT_N_JOBS', 'DEFAULT_MP_THRESHOLD', 'MAX_CHUNK_SIZE', 'DEFAULT_LOG_LEVEL']
+
 # =============================================================================
 # Multiprocessing Configuration
 # =============================================================================

@@ -3,20 +3,28 @@ from rdkit.Chem import AllChem
 import numpy as np
 from io import BytesIO
 
-from openeye import oechem
+from ..constants import HAS_OPENEYE, oechem
 
 def oe_to_rdkit(oe_mol: 'oechem.OEMol') -> Chem.Mol:
     """
     Convert OpenEye molecule with conformers to RDKit molecule.
     Preserves atom ordering by using SDF format.
-    
+
     Args:
         oe_mol: OpenEye molecule with conformers
-        
+
     Returns:
         RDKit molecule with all conformers
+
+    Raises:
+        ImportError: If OpenEye is not available
     """
-    
+    if not HAS_OPENEYE:
+        raise ImportError(
+            "OpenEye toolkit is required for oe_to_rdkit conversion. "
+            "Install openeye-toolkits to use this function."
+        )
+
     # Write first conformer to SDF to get the structure with correct atom ordering
     ofs = oechem.oemolostream()
     ofs.SetFormat(oechem.OEFormat_SDF)

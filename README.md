@@ -20,13 +20,60 @@ MolForge processes molecular data through modular, configurable steps including 
 
 ## Installation
 
+### Option 1: Using Conda (Recommended)
+
+The recommended way to install MolForge is using conda, which handles all dependencies including RDKit:
+
 ```bash
+# Clone the repository
+git clone https://github.com/molML/molforge.git
+cd molforge
+
+# Create and activate the conda environment
+conda env create -f environment.yaml
+conda activate molforge
+```
+
+**Verify installation:**
+```bash
+python -c "import molforge; print(f'MolForge v{molforge.__version__} installed successfully')"
+```
+
+### Option 2: Using pip
+
+If you prefer pip, make sure you have RDKit installed first:
+
+```bash
+# Install RDKit (if not already installed)
+conda install -c conda-forge rdkit
+
+# Clone and install MolForge
 git clone https://github.com/molML/molforge.git
 cd molforge
 pip install -e .
+
+# Optional: Install CLI dependencies
+pip install -e ".[cli]"
 ```
 
-**Requirements:** Python ≥3.8, pandas, rdkit
+**Verify installation:**
+```bash
+python -c "import molforge; print(f'MolForge v{molforge.__version__} installed successfully')"
+```
+
+### Optional Dependencies
+
+- **OpenEye Toolkit** (for OpenEye conformer backend, requires commercial license):
+  ```bash
+  conda install -c openeye openeye-toolkits
+  ```
+
+- **MolBox** (for MolBox integration):
+  ```bash
+  pip install molbox
+  ```
+
+**Requirements:** Python ≥3.8, pandas, rdkit, numpy
 
 ## Quick Start
 

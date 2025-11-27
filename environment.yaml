@@ -2,17 +2,49 @@ name: molforge
 channels:
   - conda-forge
   - defaults
+
 dependencies:
+  # ============================================================================
+  # Core Dependencies (Required)
+  # ============================================================================
   - python>=3.8
   - pip
-  - pandas>=1.5.0
-  - numpy>=1.21.0
-  - rdkit>=2023.3.0
-  - requests>=2.25.0
-  - tqdm>=4.60.0
-  - psutil>=5.8.0
-  - joblib>=1.0.0
-  - pyyaml>=5.4
-  - questionary>=2.0.0
+
+  # Data processing and manipulation
+  - pandas>=1.5.0              # DataFrames and data manipulation
+  - numpy>=1.21.0              # Numerical operations
+
+  # Cheminformatics
+  - rdkit>=2023.3.0            # Core cheminformatics toolkit (required)
+
+  # System and utilities
+  - requests>=2.25.0           # HTTP requests (ChEMBL downloads)
+  - tqdm>=4.60.0               # Progress bars
+  - psutil>=5.8.0              # System utilities (multiprocessing, memory)
+  - joblib>=1.0.0              # Parallel processing
+
+  # ============================================================================
+  # CLI Dependencies (Optional but recommended)
+  # ============================================================================
+  - pyyaml>=5.4                # YAML configuration file support
+
+  # ============================================================================
+  # Development Dependencies (Optional)
+  # ============================================================================
+  - pytest>=7.0.0              # Testing framework
+  - pytest-mock>=3.6.0         # Mocking for tests
+
+  # ============================================================================
+  # Install molforge in editable mode
+  # ============================================================================
   - pip:
     - -e .
+
+# ============================================================================
+# Optional Dependencies (install separately if needed)
+# ============================================================================
+# OpenEye Toolkit (requires commercial license):
+#   conda install -c openeye openeye-toolkits
+#
+# MolBox integration:
+#   pip install molbox

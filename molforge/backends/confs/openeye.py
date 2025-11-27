@@ -16,13 +16,7 @@ import pandas as pd
 from rdkit import Chem
 
 from .base import ConformerBackend
-
-try:
-    import openeye.oechem as oechem
-    OPENEYE_AVAILABLE = True
-except ImportError:
-    OPENEYE_AVAILABLE = False
-    
+from ...utils.constants import HAS_OPENEYE, oechem
 from ...utils.mols.convert import oe_to_rdkit
 
 
@@ -51,7 +45,7 @@ class OpenEyeBackend(ConformerBackend):
         super().__init__(params, logger, context)
 
         # Validate OpenEye availability
-        if not OPENEYE_AVAILABLE:
+        if not HAS_OPENEYE:
             raise ImportError(
                 "OpenEye Python toolkit not available. "
                 "Install openeye-toolkits to use OpenEye backend."
