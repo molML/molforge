@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 
 import os
 import shutil
-import psutil
+import multiprocessing as mp
 
 from .base import BaseParams
 
@@ -125,7 +125,7 @@ class GenerateConfsParams(BaseParams):
 
         # Auto-detect CPU count for MPI if needed
         if self.backend == 'openeye' and self.mpi_np == -1:
-            self.mpi_np = max(1, psutil.cpu_count() - 1)
+            self.mpi_np = max(1, mp.cpu_count() - 1)
 
     def _find_omega_executable(self) -> str:
         """

@@ -1,6 +1,5 @@
 from typing import Tuple, List, Optional, Any, Callable
 
-import psutil
 import gc
 
 import multiprocessing as mp
