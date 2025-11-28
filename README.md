@@ -63,17 +63,31 @@ python -c "import molforge; print(f'MolForge v{molforge.__version__} installed s
 
 ### Optional Dependencies
 
-- **OpenEye Toolkit** (for OpenEye conformer backend, requires commercial license):
+- **OpenEye Toolkit** (optional conformer generation backend):
+
+  Requires a license from OpenEye Scientific. Academic licenses are available for non-commercial research.
+
   ```bash
+  # Install toolkit
   conda install -c openeye openeye-toolkits
+
+  # Set license file path
+  export OE_LICENSE=/path/to/oe_license.txt
   ```
+
+  For licensing information, see [OpenEye Academic Licensing](https://www.eyesopen.com/academic-licensing).
 
 - **MolBox** (for MolBox integration):
   ```bash
   pip install molbox
   ```
 
-**Requirements:** Python ≥3.8, pandas, rdkit, numpy
+  Or via pip:
+  ```bash
+  pip install -e ".[molbox]"
+  ```
+
+**Requirements:** Python ≥3.12.1, pandas, numpy, scipy, rdkit, requests, tqdm, joblib, tabulate
 
 ## Quick Start
 
