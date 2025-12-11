@@ -20,9 +20,9 @@ MolForge processes molecular data through modular, configurable steps including 
 
 ## Installation
 
-### Option 1: Using Conda (Recommended)
+### Standard Installation (Recommended)
 
-The recommended way to install MolForge is using conda, which handles all dependencies including RDKit:
+For most users who don't need OpenEye Toolkit:
 
 ```bash
 # Clone the repository
@@ -39,55 +39,58 @@ conda activate molforge
 python -c "import molforge; print(f'MolForge v{molforge.__version__} installed successfully')"
 ```
 
-### Option 2: Using pip
+### Installation with OpenEye Toolkit
 
-If you prefer pip, make sure you have RDKit installed first:
+**Important:** OpenEye Toolkit requires a commercial license. Academic licenses are available for non-commercial research from [OpenEye Academic Licensing](https://www.eyesopen.com/academic-licensing).
+
+Follow these steps in order to avoid dependency conflicts:
 
 ```bash
-# Install RDKit (if not already installed)
+# Clone the repository
+git clone https://github.com/molML/molforge.git
+cd molforge
+
+# Step 1: Create environment with Python 3.12
+conda create -n molforge python=3.12
+conda activate molforge
+
+# Step 2: Install OpenEye Toolkit (requires license)
+conda install -c openeye openeye-toolkits
+
+# Step 3: Install remaining dependencies
+conda env update -f environment.yaml --prune
+
+# Set license file path (required to use OpenEye)
+export OE_LICENSE=/path/to/oe_license.txt
+```
+
+**Verify installation:**
+```bash
+python -c "import molforge; from molforge.utils.constants import HAS_OPENEYE; print(f'MolForge v{molforge.__version__} | OpenEye: {HAS_OPENEYE}')"
+```
+
+### Alternative: pip Installation
+
+If you prefer pip and have RDKit installed:
+
+```bash
+# Install RDKit first (required)
 conda install -c conda-forge rdkit
 
 # Clone and install MolForge
 git clone https://github.com/molML/molforge.git
 cd molforge
-pip install -e .
-
-# Optional: Install CLI dependencies
 pip install -e ".[cli]"
 ```
 
-**Verify installation:**
+### Optional: MolBox Integration
+
 ```bash
-python -c "import molforge; print(f'MolForge v{molforge.__version__} installed successfully')"
+conda activate molforge
+pip install molbox
 ```
 
-### Optional Dependencies
-
-- **OpenEye Toolkit** (optional conformer generation backend):
-
-  Requires a license from OpenEye Scientific. Academic licenses are available for non-commercial research.
-
-  ```bash
-  # Install toolkit
-  conda install -c openeye openeye-toolkits
-
-  # Set license file path
-  export OE_LICENSE=/path/to/oe_license.txt
-  ```
-
-  For licensing information, see [OpenEye Academic Licensing](https://www.eyesopen.com/academic-licensing).
-
-- **MolBox** (for MolBox integration):
-  ```bash
-  pip install molbox
-  ```
-
-  Or via pip:
-  ```bash
-  pip install -e ".[molbox]"
-  ```
-
-**Requirements:** Python ≥3.12.1, pandas, numpy, scipy, rdkit, requests, tqdm, joblib, tabulate
+**Requirements:** Python 3.12, pandas, numpy, scipy, rdkit, requests, tqdm, joblib, tabulate
 
 ## Quick Start
 

@@ -1,3 +1,18 @@
+# ============================================================================
+# MolForge Environment Configuration
+# ============================================================================
+# This file supports two installation paths:
+#
+# 1. Fresh install (without OpenEye):
+#    conda env create -f environment.yaml
+#
+# 2. Update existing environment (with OpenEye already installed):
+#    conda activate molforge
+#    conda env update -f environment.yaml --prune
+#
+# For OpenEye installation, see README.md Installation section.
+# ============================================================================
+
 name: molforge
 channels:
   - conda-forge
@@ -7,33 +22,35 @@ dependencies:
   # ============================================================================
   # Core Dependencies (Required)
   # ============================================================================
-  - python>=3.12.1
+  - python=3.12           # Fixed to 3.12.x for OpenEye compatibility
   - pip
 
   # Data processing and manipulation
-  - pandas>=2.2.0              # DataFrames and data manipulation
-  - numpy>=1.26.3              # Numerical operations
-  - scipy>=1.16.3              # Statistical analysis (distributions actor)
+  - pandas>=2.2              # DataFrames and data manipulation
+  - numpy>=1.26              # Numerical operations
+  - scipy>=1.12              # Statistical analysis (distributions actor)
 
   # Cheminformatics
-  - rdkit>=2025.9.1            # Core cheminformatics toolkit (required)
+  - rdkit>=2024.3            # Core cheminformatics toolkit (required)
 
   # System and utilities
-  - requests>=2.31.0           # HTTP requests (ChEMBL downloads)
-  - tqdm>=4.66.2               # Progress bars
-  - joblib>=1.3.2              # Parallel processing
-  - tabulate>=0.9.0            # Formatted table output
+  - requests>=2.31           # HTTP requests (ChEMBL downloads)
+  - tqdm>=4.66               # Progress bars
+  - joblib>=1.3              # Parallel processing
+  - tabulate>=0.9            # Formatted table output
 
   # ============================================================================
   # CLI Dependencies (Optional but recommended)
   # ============================================================================
   - pyyaml>=5.4                # YAML configuration file support
+  - questionary>=2.0           # Interactive CLI prompts
 
   # ============================================================================
   # Development Dependencies (Optional)
   # ============================================================================
-  - pytest>=7.0.0              # Testing framework
-  - pytest-mock>=3.6.0         # Mocking for tests
+  # NOTE: pytest is automatically installed by openeye-toolkits when present
+  - pytest>=7.0                # Testing framework
+  - pytest-mock>=3.6           # Mocking for tests
 
   # ============================================================================
   # Install molforge in editable mode
@@ -44,8 +61,6 @@ dependencies:
 # ============================================================================
 # Optional Dependencies (install separately if needed)
 # ============================================================================
-# OpenEye Toolkit (requires commercial license):
-#   conda install -c openeye openeye-toolkits
-#
 # MolBox integration:
+#   conda activate molforge
 #   pip install molbox
