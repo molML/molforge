@@ -78,13 +78,13 @@ class GenerateConfsParams(BaseParams):
     """Number of MPI processes, -1 = auto-detect (OpenEye)"""
 
     strict: bool = True
-    """Use strict generation mode (OpenEye)"""
+    """Only process molecules with complete (stereochemistry) information (OpenEye)"""
 
     flipper: bool = False
-    """Enable nitrogen/amide flipping (OpenEye)"""
+    """Enable unassigned stereo-isomer flipping (OpenEye)"""
 
     flipper_warts: bool = False
-    """Generate additional stereoisomers for problematic cases (OpenEye)"""
+    """Add suffix to flipped stereoisomers names (OpenEye)"""
 
     flipper_maxcenters: int = 4
     """Maximum stereocenters to enumerate with flipper (OpenEye)"""
