@@ -13,7 +13,7 @@ import numpy as np
 
 
 class Vocabulary:
-    """Stores the tokens and their conversion to one-hot vectors."""
+    """Stores the tokens and their conversion to integer indices."""
 
     def __init__(
         self, tokens=None, starting_id=0, pad_token=0, bos_token=1, eos_token=2, unk_token=None
@@ -88,32 +88,40 @@ class Vocabulary:
 
     def encode(self, tokens):
         """
-        Encodes a list of tokens, encoding them in 1-hot encoded vectors.
+        Encodes a list of tokens as integer indices.
+
+        Converts tokens to their vocabulary indices, which can be used as input to
+        embedding layers in neural networks (e.g., LSTM, transformers).
+
         :param tokens: Tokens to encode.
-        :return : An numpy array with the tokens encoded.
+        :return: A numpy array of integer indices. Unknown tokens are either
+                 mapped to unk_token (if set) or filtered out (if unk_token is None).
         """
-        ohe_vect = np.zeros(len(tokens), dtype=np.float32)
-        ohe_keep_mask = np.ones_like(tokens, dtype=bool)
+        encoded_indices = np.zeros(len(tokens), dtype=np.float32)
+        keep_mask = np.ones_like(tokens, dtype=bool)
         for i, token in enumerate(tokens):
             if token not in self._tokens:
                 if hasattr(self, "unk_token") and (self.unk_token is not None):
                     unk_symbol = self[self.unk_token]
-                    ohe_vect[i] = self._tokens[unk_symbol]
+                    encoded_indices[i] = self._tokens[unk_symbol]
                 else:
-                    ohe_keep_mask[i] = False
+                    keep_mask[i] = False
             else:
-                ohe_vect[i] = self._tokens[token]
-        return ohe_vect[ohe_keep_mask]
+                encoded_indices[i] = self._tokens[token]
+        return encoded_indices[keep_mask]
 
-    def decode(self, ohe_vect):
+    def decode(self, encoded_indices):
         """
-        Decodes a one-hot encoded vector matrix to a list of tokens.
-        :param : A numpy array with some encoded tokens.
-        :return : An unencoded version of the input array.
+        Decodes integer indices back to a list of tokens.
+
+        Converts vocabulary indices back to their corresponding token strings.
+
+        :param encoded_indices: A numpy array or list of integer indices.
+        :return: A list of decoded token strings.
         """
         tokens = []
-        for ohv in ohe_vect:
-            tokens.append(self[ohv])
+        for idx in encoded_indices:
+            tokens.append(self[idx])
         return tokens
 
     def _add(self, token, idx):
