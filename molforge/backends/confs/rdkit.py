@@ -426,6 +426,9 @@ class RDKitBackend(ConformerBackend):
         if self._output_file is None:
             raise RuntimeError("No conformers generated yet. Call generate_conformers() first.")
 
+        # Ensure the pickle file exists before attempting to read it
+        if not Path(self._output_file).exists():
+            raise RuntimeError(f"Conformer pickle file not found: {self._output_file}")
         # Read molecule data (binary, name) tuples from pickle file
         with open(self._output_file, 'rb') as f:
             mol_data = pickle.load(f)
