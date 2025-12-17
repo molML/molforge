@@ -424,21 +424,32 @@ class RDKitBackend(ConformerBackend):
             RDKit molecules with conformers
         """
         if self._output_file is None:
-            raise RuntimeError("No conformers generated yet. Call generate_conformers() first.")
+            self.log("No conformers generated yet. Call generate_conformers() first.", level='ERROR')
+            return
 
-        # Ensure the pickle file exists before attempting to read it
+        # Check file exists
         if not Path(self._output_file).exists():
-            raise RuntimeError(f"Conformer pickle file not found: {self._output_file}")
+            self.log("Output file not found", level='ERROR')
+            return
+
         # Read molecule data (binary, name) tuples from pickle file
-        with open(self._output_file, 'rb') as f:
-            mol_data = pickle.load(f)
+        try:
+            with open(self._output_file, 'rb') as f:
+                mol_data = pickle.load(f)
+        except Exception as e:
+            self.log(f"Failed to read output file: {e}", level='ERROR')
+            return
 
         # Convert from binary format and restore names
         for mol_binary, name in mol_data:
-            mol = Chem.Mol(mol_binary)
-            if name and not mol.HasProp('_Name'):
-                mol.SetProp('_Name', name)
-            yield mol
+            try:
+                mol = Chem.Mol(mol_binary)
+                if name and not mol.HasProp('_Name'):
+                    mol.SetProp('_Name', name)
+                yield mol
+            except Exception as e:
+                self.log(f"Failed to load molecule from binary ({name}): {e}", level='WARNING')
+                continue
 
     def get_report_dataframe(self) -> pd.DataFrame:
         """Get conformer generation report as DataFrame (mimics OMEGA format)."""
