@@ -47,6 +47,9 @@ class GenerateConfsParams(BaseParams):
     dropna: bool = True
     """Drop rows with missing SMILES before processing"""
 
+    convert_to_rdkit: bool = True
+    """Convert conformers to RDKit Mol objects when extracting (OpenEye only, RDKit is native)"""
+
     # ==================== RDKit-Specific Parameters ====================
     # These are only used when backend='rdkit'
 

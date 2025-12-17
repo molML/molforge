@@ -7,7 +7,9 @@ for conformer generation. Stores molecules in memory for efficient processing.
 
 from typing import Dict, Any, Iterator, Tuple
 import time
+import pickle
 import pandas as pd
+from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from rdkit import Chem
 from rdkit.Chem import AllChem
@@ -197,12 +199,19 @@ class RDKitBackend(ConformerBackend):
 
         # Storage for generated conformers (in input order)
         self._molecules: list[Chem.Mol] = []
-        self._report_data: list[Dict[str, Any]] = []
+        self._output_file: str = None  # Path to pickle file
 
         self.log(
             f"RDKit ETKDG initialized: max_confs={params.max_confs}, "
             f"rms={params.rms_threshold}, optimize={params.use_uff}"
         )
+
+    @property
+    def _report_file(self) -> str:
+        """Path to report CSV file."""
+        if self.context and hasattr(self.context, 'output_dir'):
+            return str(Path(self.context.output_dir) / "RDKit_rpt.csv")
+        return "RDKit_rpt.csv"
 
     def generate_conformers(self, smiles_list: list[str], names_list: list[str]) -> Dict[str, Dict[str, Any]]:
         """
@@ -217,7 +226,6 @@ class RDKitBackend(ConformerBackend):
         """
         # Clear previous results
         self._molecules.clear()
-        self._report_data.clear()
 
         # Prepare chunks (use smaller chunk size for conformer generation)
         max_chunk_size = 50  # Smaller chunks enable frequent progress updates
@@ -288,11 +296,12 @@ class RDKitBackend(ConformerBackend):
                     results_dict[name] = result
 
         # Store molecules and build report in input order
+        report_data = []
         for smiles, name in zip(smiles_list, names_list):
             result = results_dict[name]
 
             # Build report entry (mimics OMEGA format)
-            self._report_data.append({
+            report_data.append({
                 'Molecule': name,
                 'SMILES': smiles,
                 'Rotors': result.get('rotors', 0),
@@ -311,6 +320,15 @@ class RDKitBackend(ConformerBackend):
 
         success_count = sum(1 for r in results_dict.values() if r['success'])
         self.log(f"RDKit generation complete: {success_count}/{len(smiles_list)} succeeded")
+
+        # Write molecules to pickle file
+        self._output_file = self._write_pickle_file()
+
+        # Write report to CSV file
+        self._write_report_file(report_data)
+
+        # Clear molecules from memory to free RAM
+        self._molecules.clear()
 
         return results_dict
 
@@ -342,36 +360,136 @@ class RDKitBackend(ConformerBackend):
                 f"Rate: {rate:.0f} mol/s"
             )
 
-    def get_endpoint(self) -> list[Chem.Mol]:
+    def _write_pickle_file(self) -> str:
         """
-        Return list of molecules as endpoint.
+        Write molecules to pickle file using RDKit binary format.
 
-        For in-memory backends, return the stored list.
+        Returns:
+            Path to pickle file
         """
-        return self._molecules
+        # Determine output path (follow OpenEye pattern)
+        if self.context and hasattr(self.context, 'output_dir'):
+            output_path = Path(self.context.output_dir) / "RDKit_conformers.pkl"
+        else:
+            output_path = Path("RDKit_conformers.pkl")
+
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # Store molecules as (binary, name) tuples to preserve names reliably
+        mol_data = []
+        for mol in self._molecules:
+            mol_binary = mol.ToBinary()
+            name = mol.GetProp('_Name') if mol.HasProp('_Name') else ''
+            mol_data.append((mol_binary, name))
+
+        # Write molecule data to pickle
+        with open(output_path, 'wb') as f:
+            pickle.dump(mol_data, f)
+
+        self.log(f"Wrote {len(self._molecules)} molecules to {output_path}")
+        return str(output_path)
+
+    def _write_report_file(self, report_data: list[Dict[str, Any]]) -> None:
+        """
+        Write conformer generation report to CSV file.
+
+        Args:
+            report_data: List of report entries (dicts)
+        """
+        # Create DataFrame from report data
+        report_df = pd.DataFrame(report_data)
+
+        # Write to CSV file
+        Path(self._report_file).parent.mkdir(parents=True, exist_ok=True)
+        report_df.to_csv(self._report_file, index=False)
+
+        self.log(f"Wrote report to {self._report_file}")
+
+    def get_endpoint(self) -> str:
+        """
+        Return path to pickle file (homogeneous with OpenEye backend).
+
+        Returns:
+            Path to pickle file containing RDKit molecules
+        """
+        if self._output_file is None:
+            raise RuntimeError("No conformers generated yet. Call generate_conformers() first.")
+        return self._output_file
 
     def extract_molecules(self) -> Iterator[Chem.Mol]:
         """
-        Extract molecules in generation order.
+        Extract molecules from pickle file.
 
         Yields:
             RDKit molecules with conformers
         """
-        for mol in self._molecules:
-            yield mol
+        if self._output_file is None:
+            self.log("No conformers generated yet. Call generate_conformers() first.", level='ERROR')
+            return
+
+        # Check file exists
+        if not Path(self._output_file).exists():
+            self.log("Output file not found", level='ERROR')
+            return
+
+        # Read molecule data (binary, name) tuples from pickle file
+        try:
+            with open(self._output_file, 'rb') as f:
+                mol_data = pickle.load(f)
+        except Exception as e:
+            self.log(f"Failed to read output file: {e}", level='ERROR')
+            return
+
+        # Convert from binary format and restore names
+        for mol_binary, name in mol_data:
+            try:
+                mol = Chem.Mol(mol_binary)
+                if name and not mol.HasProp('_Name'):
+                    mol.SetProp('_Name', name)
+                yield mol
+            except Exception as e:
+                self.log(f"Failed to load molecule from binary ({name}): {e}", level='WARNING')
+                continue
 
     def get_report_dataframe(self) -> pd.DataFrame:
         """Get conformer generation report as DataFrame (mimics OMEGA format)."""
-        import pandas as pd
-        if not self._report_data:
+        if not Path(self._report_file).exists():
+            self.log("Report file not found", level='WARNING')
             return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
-        return pd.DataFrame(self._report_data)
+
+        try:
+            return pd.read_csv(self._report_file)
+        except Exception as e:
+            self.log(f"Failed to read report file: {e}", level='ERROR')
+            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
     def get_successful_names(self) -> list[str]:
-        """Get list of successfully generated molecule names."""
-        return [mol.GetProp('_Name') for mol in self._molecules if mol.HasProp('_Name')]
+        """Get list of successfully generated molecule names from pickle file."""
+        if self._output_file is None:
+            self.log("Cannot extract names from file: no output file generated yet", level='WARNING')
+            return []
+
+        if not Path(self._output_file).exists():
+            self.log("Cannot extract names from file: output file does not exist", level='WARNING')
+            return []
+
+        if Path(self._output_file).stat().st_size == 0:
+            self.log("Cannot extract names from file: output file is empty", level='WARNING')
+            return []
+
+        # Read molecule names from pickle file
+        try:
+            with open(self._output_file, 'rb') as f:
+                mol_data = pickle.load(f)
+
+            # Extract names from (binary, name) tuples
+            names = [name for _, name in mol_data]
+            return names
+
+        except Exception as e:
+            self.log(f"Cannot extract names from file: failed to read output file: {e}", level='ERROR')
+            return []
 
     def clear(self):
         """Clear stored molecules to free memory."""
         self._molecules.clear()
-        self._report_data.clear()

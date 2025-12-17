@@ -31,6 +31,18 @@ def test_data():
     })
 
 
+@pytest.fixture
+def conformer_test_data():
+    """Drug-like molecules with rotatable bonds for conformer generation testing."""
+    return pd.DataFrame({
+        'smiles': [
+            'CC(C)Cc1ccc(cc1)C(C)C(=O)O',        # Ibuprofen (racemic)
+            'CC(=O)Nc1ccc(O)cc1',                 # Paracetamol/Acetaminophen
+            'CC(C)Cc1ccc(cc1)[C@@H](C)C(=O)O',   # (S)-Ibuprofen (with stereochemistry)
+            'INVALID_SMILES',                     # Invalid SMILES
+        ],
+        'molecule_id': ['ibuprofen', 'paracetamol', 's_ibuprofen', 'invalid']
+    })
 
 
 @pytest.fixture
@@ -172,6 +184,69 @@ class TestRDKitBackend:
         assert 'n_conformers' in result.data.columns
         assert 'Status' in result.data.columns
 
+    def test_rdkit_pickle_file_integrity(self, conformer_test_data, logger, pipeline_context):
+        """
+        Verify RDKit pickle file integrity and consistency with DataFrame results.
+
+        Tests:
+        1. Pickle file exists at expected path
+        2. File contains (binary, name) tuples in correct format
+        3. Pickle molecule names match conformer_success=True rows in DataFrame
+        4. Molecules can be reconstructed from pickle with accessible conformers
+        5. Invalid SMILES are properly excluded from pickle file
+        """
+        import pickle
+        from pathlib import Path
+
+        params = GenerateConfsParams(
+            backend='rdkit',
+            max_confs=20,
+            SMILES_column='smiles',
+            names_column='molecule_id',
+            dropna=False
+        )
+
+        actor = GenerateConfs(params, logger=logger)
+        actor_input = ActorInput(data=conformer_test_data, context=pipeline_context)
+
+        output = actor(actor_input)
+
+        # 1. Verify pickle file exists at expected path
+        expected_pickle_path = Path(pipeline_context.output_dir) / "RDKit_conformers.pkl"
+        assert expected_pickle_path.exists(), "Pickle file should exist"
+
+        # 2. Read pickle file directly and verify format
+        with open(expected_pickle_path, 'rb') as f:
+            mol_data = pickle.load(f)
+
+        # Verify it's a list of tuples
+        assert isinstance(mol_data, list), "Pickle should contain a list"
+        assert all(isinstance(item, tuple) and len(item) == 2 for item in mol_data), \
+            "Each item should be a (binary, name) tuple"
+
+        # 3. Extract successful names from DataFrame and compare with pickle
+        successful_df_names = output.data[output.data['conformer_success']]['molecule_id'].tolist()
+        pickle_names = [name for _, name in mol_data]
+
+        assert set(pickle_names) == set(successful_df_names), \
+            "Pickle file names should match conformer_success=True names in DataFrame"
+
+        # 4. Verify invalid SMILES is excluded
+        assert 'invalid' not in pickle_names, "Invalid SMILES should not be in pickle file"
+        assert 'invalid' in output.data['molecule_id'].tolist(), "Invalid SMILES should be in DataFrame"
+        invalid_row = output.data[output.data['molecule_id'] == 'invalid']
+        assert not invalid_row['conformer_success'].iloc[0], "Invalid SMILES should have conformer_success=False"
+
+        # 5. Reconstruct molecules from binary and verify conformers
+        for mol_binary, name in mol_data:
+            mol = Chem.Mol(mol_binary)
+            assert mol is not None, f"Should be able to reconstruct molecule {name}"
+            assert mol.GetNumConformers() > 0, f"Molecule {name} should have conformers"
+
+            # Verify name is preserved
+            if mol.HasProp('_Name'):
+                assert mol.GetProp('_Name') == name
+
 
 class TestOpenEyeBackend:
     """Tests for OpenEye backend via unified actor."""
@@ -239,6 +314,75 @@ class TestOpenEyeBackend:
         for mol in molecules:
             assert isinstance(mol, Chem.Mol)
             assert mol.GetNumConformers() > 0
+
+    @pytest.mark.skipif(
+        not HAS_OPENEYE,
+        reason="OpenEye toolkit not available"
+    )
+    def test_openeye_convert_to_rdkit_parameter(self, conformer_test_data, logger, pipeline_context):
+        """
+        Verify convert_to_rdkit parameter controls molecule type from extract_molecules().
+
+        Tests:
+        1. convert_to_rdkit=False yields OpenEye molecules with conformers
+        2. convert_to_rdkit=True yields RDKit molecules with conformers
+        3. Invalid SMILES are properly excluded
+        """
+        from molforge.utils.constants import oechem
+
+        # Test Case 1: convert_to_rdkit=False (yields OpenEye molecules)
+        params_oe = GenerateConfsParams(
+            backend='openeye',
+            max_confs=20,
+            SMILES_column='smiles',
+            names_column='molecule_id',
+            dropna=True,
+            convert_to_rdkit=False
+        )
+
+        actor_oe = GenerateConfs(params_oe, logger=logger)
+        actor_input_oe = ActorInput(data=conformer_test_data, context=pipeline_context)
+
+        output_oe = actor_oe(actor_input_oe)
+
+        # Extract molecules and verify they are OpenEye molecules
+        molecules_oe = list(actor_oe.extract_molecules())
+        assert len(molecules_oe) > 0, "Should have successful molecules"
+
+        for mol in molecules_oe:
+            # Verify type is OpenEye molecule
+            assert isinstance(mol, oechem.OEMol), "Expected OpenEye OEMol instance"
+            assert type(mol).__module__ == 'oechem', \
+                f"Expected oechem module, got {type(mol).__module__}"
+            # Verify conformers are accessible (OpenEye uses GetMaxConfIdx)
+            assert mol.GetMaxConfIdx() >= 0, "OpenEye molecule should have conformers"
+
+        # Test Case 2: convert_to_rdkit=True (yields RDKit molecules)
+        params_rdkit = GenerateConfsParams(
+            backend='openeye',
+            max_confs=20,
+            SMILES_column='smiles',
+            names_column='molecule_id',
+            dropna=True,
+            convert_to_rdkit=True
+        )
+
+        actor_rdkit = GenerateConfs(params_rdkit, logger=logger)
+        actor_input_rdkit = ActorInput(data=conformer_test_data, context=pipeline_context)
+
+        output_rdkit = actor_rdkit(actor_input_rdkit)
+
+        # Extract molecules and verify they are RDKit molecules
+        molecules_rdkit = list(actor_rdkit.extract_molecules())
+        assert len(molecules_rdkit) > 0, "Should have successful molecules"
+
+        for mol in molecules_rdkit:
+            # Verify type is RDKit molecule
+            assert isinstance(mol, Chem.Mol), "Expected RDKit molecule"
+            assert type(mol).__module__ == 'rdkit.Chem.rdchem', \
+                f"Expected RDKit molecule, got {type(mol).__module__}"
+            # Verify conformers are accessible (RDKit uses GetNumConformers)
+            assert mol.GetNumConformers() > 0, "RDKit molecule should have conformers"
 
 
 class TestBackendRegistry:

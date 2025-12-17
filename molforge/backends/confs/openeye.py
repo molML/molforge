@@ -386,28 +386,32 @@ class OpenEyeBackend(ConformerBackend):
 
     def extract_molecules(self) -> Iterator[Chem.Mol]:
         """
-        Extract molecules from OEB file.
+        Extract molecules from OEB file, optionally converting to RDKit.
 
         Yields:
-            RDKit molecules with conformers
+            RDKit molecules (if convert_to_rdkit=True) or OpenEye molecules (if False)
         """
         if not Path(self._output_file).exists():
             self.log("Output file not found", level='ERROR')
             return
 
-        # Read OEB file and convert to RDKit
+        # Read OEB file
         try:
             ifs = oechem.oemolistream(self._output_file)
 
             for oemol in ifs.GetOEMols():
-                # Convert OpenEye mol to RDKit
-                try:
-                    rdkit_mol = oe_to_rdkit(oemol)
-                    if rdkit_mol:
-                        yield rdkit_mol
-                except Exception as e:
-                    self.log(f"Failed to convert molecule: {e}", level='WARNING')
-                    continue
+                if self.params.convert_to_rdkit:
+                    # Convert OpenEye mol to RDKit
+                    try:
+                        rdkit_mol = oe_to_rdkit(oemol)
+                        if rdkit_mol:
+                            yield rdkit_mol
+                    except Exception as e:
+                        self.log(f"Failed to convert molecule: {e}", level='WARNING')
+                        continue
+                else:
+                    # Yield OpenEye molecule directly (no conversion)
+                    yield oechem.OEMol(oemol)
 
         except Exception as e:
             self.log(f"Failed to read output file: {e}", level='ERROR')
