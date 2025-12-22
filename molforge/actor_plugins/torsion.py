@@ -5,21 +5,26 @@ Analyzes torsional properties for molecules with conformers.
 Requires phd-tools package for calculations.
 """
 
-from typing import List, Tuple, Dict, Iterator
+from typing import List, Tuple, Dict
 import traceback
 
 import pandas as pd
-from rdkit import Chem
 
 # Attempt to import private toolkit
 try:
     from phd_tools.chemistry.torsion import TorsionCalculator
-    from phd_tools.chemistry.savebonds import CanonicalBondPropertiesDB
+    from phd_tools.chemistry.savebonds import CanonicalBondProperties
+    from phd_tools.chemistry.convert import MoleculeConverter, HAS_OPENEYE
     TORSION_AVAILABLE = True
 except ImportError:
     TORSION_AVAILABLE = False
     TorsionCalculator = None
-    CanonicalBondPropertiesDB = None
+    CanonicalBondProperties = None
+    MoleculeConverter = None
+    HAS_OPENEYE = False
+
+if HAS_OPENEYE:
+    from openeye import oechem
 
 
 # Plugin imports
@@ -81,6 +86,8 @@ class CalculateTorsions(BaseActor):
         - phd-tools package (private)
 
     Output columns:
+        - torsion_mapping: Canonical bond flexibility mapping {(rank1, rank2): variance}
+        - torsion_success: Boolean flag for successful torsion calculation
         - n_confs: Number of conformers analyzed
         - n_torsions: Total torsions detected
         - n_rotor_torsions: Rotatable bond torsions
@@ -94,8 +101,9 @@ class CalculateTorsions(BaseActor):
     __param_class__ = CalculateTorsionsParams
 
     OUTPUT_COLUMNS = [
-        'n_confs', 'low_confs', 'n_ring_torsions',
-        'n_rotor_torsions', 'n_torsions', 'mean_variance', 'warnings'
+        'torsion_mapping', 'torsion_success', 'n_confs', 'low_confs',
+        'n_ring_torsions', 'n_rotor_torsions', 'n_torsions',
+        'mean_variance', 'warnings'
     ]
 
     @property
@@ -107,6 +115,11 @@ class CalculateTorsions(BaseActor):
     def output_columns(self) -> List[str]:
         """Columns added by torsion analysis."""
         return self.OUTPUT_COLUMNS
+
+    @property
+    def forge_endpoint(self) -> str:
+        """Endpoint for MolForge integration. Points to torsion mapping column."""
+        return 'torsion_mapping'
 
     def __post_init__(self):
         """Initialize torsion analysis."""
@@ -121,8 +134,6 @@ class CalculateTorsions(BaseActor):
             )
 
         self.log(f"Torsion analysis initialized (device: {self.device})")
-        self.path_prefix = None
-        self.db_path = None
 
     def process(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -143,170 +154,149 @@ class CalculateTorsions(BaseActor):
                 "Ensure GenerateConfs runs before CalculateTorsions."
             )
 
-        self.db_path = self._get_run_path("torsions.db")
-        self.log(f'Results database: {self.db_path}')
-
+        # Get molecule generator (streams molecules, no memory load)
+        # Note: extract_molecules() only yields successful molecules
         mol_generator = gc_actor.extract_molecules()
 
-        _, torsion_stats = self.process_molecules(
-            mol_generator,
-            return_info=True,
-            db_path=self.db_path
-        )
+        # Process molecules and collect results
+        # Pass DataFrame success mask so we know when to pull from generator
+        torsion_stats = self.process_molecules(mol_generator, df['conformer_success'])
 
+        # Assign results to DataFrame
         for col, values in torsion_stats.items():
             df[col] = values
 
         return df
 
     def _create_output(self, data: pd.DataFrame) -> ActorOutput:
-        """Create output with database endpoint."""
-        if 'n_torsions' in data.columns:
-            total_torsions = data['n_torsions'].sum()
-            mean_metric = data['mean_variance'].mean() if 'mean_variance' in data.columns else 0.0
+        """Create output with torsion mapping endpoint."""
+        if 'n_torsions' in data.columns and 'torsion_success' in data.columns:
+            success_df = data[data['torsion_success'] == True]
+            total_torsions = success_df['n_torsions'].sum() if len(success_df) > 0 else 0
+            mean_metric = success_df['mean_variance'].mean() if len(success_df) > 0 else 0.0
+            n_success = len(success_df)
         else:
             total_torsions = 0
             mean_metric = 0.0
+            n_success = 0
 
         return ActorOutput(
             data=data,
             success=True,
             metadata={
                 'n_molecules': len(data),
+                'n_success': n_success,
                 'total_torsions': int(total_torsions),
                 'mean_metric': float(mean_metric),
-                'database_path': self.db_path
             },
-            endpoint=self.db_path
+            endpoint=self.forge_endpoint
         )
 
-    def read_results(self) -> Tuple[List[Chem.Mol], List[Dict[int, float]]]:
+    def process_molecules(self, molecules, success_mask: pd.Series) -> Dict[str, List]:
         """
-        Read analysis results from database.
-
-        Returns:
-            Tuple of (molecules, bond_metrics)
-        """
-        if self.db_path is None:
-            self.log("Database path not set. Run process() first.", level='ERROR')
-            return [], []
-
-        molecules, bond_metrics = CanonicalBondPropertiesDB.load_all_molecules(self.db_path)
-        self.log(f"Loaded {len(molecules)} molecules from {self.db_path}")
-
-        return molecules, bond_metrics
-
-    def process_molecules(
-        self,
-        molecules: Iterator,
-        return_info: bool = False,
-        save_results: bool = True,
-        db_path: str = 'default.db'
-    ) -> Tuple[List[Dict], List[Dict]] | List[Dict]:
-        """
-        Process multiple molecules.
+        Process molecules from generator and return column data.
 
         Args:
-            molecules: Iterator of RDKit molecules with conformers
-            return_info: Return statistics if True
-            save_results: Save to database if True
-            db_path: Database file path
+            molecules: Generator yielding successful molecules (RDKit or OpenEye)
+            success_mask: Boolean series indicating which rows had successful conformers
 
         Returns:
-            Bond metrics for each molecule, optionally with statistics
+            Dictionary mapping column names to lists of values
         """
-        bond_metrics = []
+        # Initialize result collectors
+        results = {col: [] for col in self.OUTPUT_COLUMNS}
 
-        if return_info:
-            stats = {
-                'n_confs': [], 'low_confs': [],
-                'n_ring_torsions': [], 'n_rotor_torsions': [],
-                'n_torsions': [], 'mean_variance': [],
-                'warnings': [],
-            }
+        # Iterate through success mask and pull from generator only for successful rows
+        for row_idx, has_conformers in enumerate(success_mask):
+            if has_conformers:
+                # Pull next successful molecule from generator
+                try:
+                    mol = next(molecules)
+                    torsion_mapping, stats, success = self._process_single_molecule(mol, row_idx)
+                except StopIteration:
+                    # Generator exhausted unexpectedly
+                    self.log(f"Generator exhausted at row {row_idx}", level='ERROR')
+                    torsion_mapping, stats, success = self._get_empty_result()
+            else:
+                # No conformer for this row - use empty results
+                torsion_mapping, stats, success = self._get_empty_result()
 
-        if save_results:
-            self.log(f"Saving results to database: {db_path}")
-            CanonicalBondPropertiesDB.initialize_database(db_path)
-            saved = 0
+            # Store results 
+            results['torsion_mapping'].append(torsion_mapping.__repr__()) # Store as string
+            results['torsion_success'].append(success)
+            results['n_confs'].append(stats['n_confs'])
+            results['low_confs'].append(stats['low_confs'])
+            results['n_ring_torsions'].append(stats['n_ring_torsions'])
+            results['n_rotor_torsions'].append(stats['n_rotor_torsions'])
+            results['n_torsions'].append(stats['n_torsions'])
+            results['mean_variance'].append(stats['mean_variance'])
+            results['warnings'].append(stats['warnings'])
 
-        for mol_idx, mol in enumerate(molecules):
-            if mol is None:
-                if return_info:
-                    for key in stats.keys():
-                        stats[key].append(None)
-                bond_metrics.append({})
-                continue
+        return results
 
-            try:
-                # Delegate to private calculator
-                bond_data, mol_stats = TorsionCalculator.compute_flexibility(
-                    mol=mol,
-                    account_for_symmetry=self.account_for_symmetry,
-                    symmetry_radius=self.symmetry_radius,
-                    ignore_colinear_bonds=self.ignore_colinear_bonds,
-                    numerical_epsilon=self.numerical_epsilon,
-                    aggregation_method=self.aggregation_method,
-                    n_confs_threshold=self.n_confs_threshold,
-                    device=self.device
-                )
-
-                if return_info:
-                    for key, val in mol_stats.items():
-                        stats[key].append(val)
-
-                bond_metrics.append(bond_data)
-
-                if save_results:
-                    mol_name = mol.GetProp("_Name") if mol.HasProp("_Name") else f"mol_{mol_idx}"
-                    CanonicalBondPropertiesDB.add_molecule(
-                        db_path, mol, bond_data, mol_name, overwrite=False
-                    )
-                    saved += 1
-
-            except Exception as e:
-                error_msg = f"{type(e).__name__}: {str(e)}" if str(e) else f"{type(e).__name__}"
-                self.log(f"Error processing molecule {mol_idx}: {error_msg}", level='WARNING')
-                self.log(f"Traceback: {traceback.format_exc()}", level='DEBUG')
-
-                if return_info:
-                    for key in stats.keys():
-                        stats[key].append(None)
-                bond_metrics.append({})
-
-        if save_results:
-            self.log(f"Saved {saved} entries to database")
-
-        if return_info:
-            return bond_metrics, stats
-        else:
-            return bond_metrics
-
-    def process_molecule(self, mol: Chem.Mol, mol_idx: int = -1,
-                        return_info: bool = False):
+    def _process_single_molecule(self, mol, mol_idx: int = -1) -> Tuple[Dict, Dict, bool]:
         """
-        Process single molecule.
+        Process single molecule and return canonical results.
 
         Args:
-            mol: RDKit molecule with conformers
-            mol_idx: Molecule index (for compatibility)
-            return_info: Return statistics if True
+            mol: RDKit or OpenEye molecule with conformers
+            mol_idx: Molecule index for logging
 
         Returns:
-            Bond metrics dict, or (bond_metrics, stats, mol) if return_info=True
+            Tuple of (canonical_torsion_mapping, statistics, success)
         """
-        bond_data, stats = TorsionCalculator.compute_flexibility(
-            mol=mol,
-            account_for_symmetry=self.account_for_symmetry,
-            symmetry_radius=self.symmetry_radius,
-            ignore_colinear_bonds=self.ignore_colinear_bonds,
-            numerical_epsilon=self.numerical_epsilon,
-            aggregation_method=self.aggregation_method,
-            n_confs_threshold=self.n_confs_threshold,
-            device=self.device
-        )
+        if mol is None:
+            return self._get_empty_result()
 
-        if return_info:
-            return bond_data, stats, mol
-        else:
-            return bond_data
+        try:
+            # Step 1: Calculate torsions (returns bond_idx -> variance)
+            bond_variance, stats = TorsionCalculator.compute_flexibility(
+                mol=mol,
+                account_for_symmetry=self.account_for_symmetry,
+                symmetry_radius=self.symmetry_radius,
+                ignore_colinear_bonds=self.ignore_colinear_bonds,
+                numerical_epsilon=self.numerical_epsilon,
+                aggregation_method=self.aggregation_method,
+                n_confs_threshold=self.n_confs_threshold,
+                device=self.device
+            )
+
+            # Step 2: Get RDKit topology for canonicalization
+            if HAS_OPENEYE and isinstance(mol, oechem.OEMol):
+                rd_topology = MoleculeConverter.openeye_to_rdkit_topology(mol)
+            else:
+                rd_topology = mol
+
+            # Step 3: Canonicalize bond indices to atom rank pairs
+            canonical_mapping = CanonicalBondProperties.bond_idx_to_canonical(
+                rd_topology, bond_variance
+            )
+
+            return canonical_mapping, stats, True
+
+        except Exception as e:
+            error_msg = f"{type(e).__name__}: {str(e)}" if str(e) else f"{type(e).__name__}"
+            self.log(f"Error processing molecule {mol_idx}: {error_msg}", level='WARNING')
+            self.log(f"Traceback: {traceback.format_exc()}", level='DEBUG')
+
+            return self._get_empty_result()
+
+    @staticmethod
+    def _get_empty_result() -> Tuple[Dict, Dict, bool]:
+        """
+        Return empty torsion results for failed molecules.
+
+        Returns:
+            Tuple of (empty_mapping, empty_stats, success=False)
+        """
+        empty_mapping = {}
+        empty_stats = {
+            'n_confs': 0,
+            'low_confs': False,
+            'n_ring_torsions': 0,
+            'n_rotor_torsions': 0,
+            'n_torsions': 0,
+            'mean_variance': 0.0,
+            'warnings': []
+        }
+        return empty_mapping, empty_stats, False
