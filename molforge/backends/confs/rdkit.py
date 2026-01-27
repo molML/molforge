@@ -300,10 +300,10 @@ class RDKitBackend(ConformerBackend):
         for smiles, name in zip(smiles_list, names_list):
             result = results_dict[name]
 
-            # Build report entry (mimics OMEGA format)
+            # Build report entry (matches OMEGA format)
             report_data.append({
-                'Molecule': name,
-                'SMILES': smiles,
+                'Molecule': smiles,
+                'Title': name,
                 'Rotors': result.get('rotors', 0),
                 'Conformers': result['n_conformers'],
                 'ElapsedTime(s)': result.get('elapsed_time', 0.0),
@@ -452,16 +452,16 @@ class RDKitBackend(ConformerBackend):
                 continue
 
     def get_report_dataframe(self) -> pd.DataFrame:
-        """Get conformer generation report as DataFrame (mimics OMEGA format)."""
+        """Get conformer generation report as DataFrame (matches OMEGA format)."""
         if not Path(self._report_file).exists():
             self.log("Report file not found", level='WARNING')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
         try:
             return pd.read_csv(self._report_file)
         except Exception as e:
             self.log(f"Failed to read report file: {e}", level='ERROR')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
     def get_successful_names(self) -> list[str]:
         """Get list of successfully generated molecule names from pickle file."""

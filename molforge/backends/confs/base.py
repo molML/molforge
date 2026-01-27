@@ -90,7 +90,13 @@ class ConformerBackend(Backend):
         Get full conformer generation report as DataFrame.
 
         Returns:
-            DataFrame with columns: Molecule, SMILES, Rotors, Conformers, ElapsedTime(s), Status
+            DataFrame with columns matching OMEGA format:
+                - Molecule: SMILES string
+                - Title: Molecule name/identifier
+                - Rotors: Rotatable bond count
+                - Conformers: Number of conformers generated
+                - ElapsedTime(s): Generation time
+                - Status: Status message (empty string for success)
         """
         pass
 

@@ -95,6 +95,9 @@ class GenerateConfsParams(BaseParams):
     oeomega_path: Optional[str] = None
     """Path to OMEGA executable (OpenEye), None = auto-detect"""
 
+    timeout: int = 3600
+    """Timeout for conformer generation execution in seconds (OpenEye)"""
+
     # ==================== Advanced ====================
 
     backend_kwargs: Dict[str, Any] = field(default_factory=dict)
