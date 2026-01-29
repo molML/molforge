@@ -166,13 +166,13 @@ class ConstructPipe:
         output, success, last_step, n_steps = initial_data, True, 'start', len(self.steps)
         pipeline_start_time = time.time()
         
-        prog = 0
         for idx, step in enumerate(self.steps):
+            prog = idx * 2
             if not success:
                 break
+
             # Start timing
             self.print(f"{'█'*prog + '░'*(n_steps*2 - prog)} [{idx+1}/{n_steps}] Starting {step}.")
-
             step_start_time = time.time()
 
             # Execute step with context
@@ -189,10 +189,9 @@ class ConstructPipe:
 
             # Log step info
             self.print(f"{'█'*(prog+1) + '░'*(n_steps*2 - (prog+1))} [{idx+1}/{n_steps}] Finished {step} | {status} | {length} rows | {step_duration}")
-            prog += 2
 
         # Total timing
-        self.print(f"{'█'*(n_steps*2)} [{idx+1}/{n_steps}] Pipeline completed | Total time: {self._format_duration(time.time() - pipeline_start_time)}")
+        self.print(f"{'█'*(n_steps*2)} [{int(prog/2) + 1}/{n_steps}] Pipeline completed | Total time: {self._format_duration(time.time() - pipeline_start_time)}")
         return output, success, last_step
 
     def _execute_step(self, input_data: Any, step: str, context: PipelineContext) -> tuple[Any, bool]:
