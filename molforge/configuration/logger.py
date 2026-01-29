@@ -101,10 +101,11 @@ class PipelineLogger:
         if log_file:
             self.log_file = log_file
             self._add_file_handler()
+            return True
         else:
             self.log_file = None
-        
-        return True
+            return False
+                
         
     def log(self, level: str, method: str, message: str, *args, **kwargs):
         """Internal logging method that adds method context."""

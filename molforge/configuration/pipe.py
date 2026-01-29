@@ -137,13 +137,11 @@ class ConstructPipe:
         self.log_path = Path(self.output_dir) / f"{self.run_id}.log"
         if self.log_path.exists():
             self.log_path.unlink()
-            
-        config_changed = self.logger.update_logger(log_file=str(self.log_path))
         
-        if not config_changed:
-            self.print("Log path was not updated", level='WARNING')
-        else:
+        if self.logger.update_logger(log_file=str(self.log_path)):
             self.print(f"Logging to {self.log_path}")
+        else:
+            self.print("Log path was updated to None. Logging to console only.", level='WARNING')
 
         # Execute pipeline
         self.print('Starting pipe.')
