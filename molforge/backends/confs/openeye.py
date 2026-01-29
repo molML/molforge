@@ -257,52 +257,97 @@ class OpenEyeBackend(ConformerBackend):
 
     def _monitor_progress(self):
         """Monitor OMEGA progress by reading report file line count."""
-        update_interval = 10  # Check every 10 seconds
-        last_count = 0
+        poll_interval = 0.1
+        base_log_interval = 5
         start_time = time.time()
-
+        
+        last_count = 0
+        last_log_time = start_time # don't log immediately
+        has_logged = False
+        
         while not self._stop_monitoring:
             try:
-                time.sleep(update_interval)
-
-                # Check if report file exists yet
+                time.sleep(poll_interval)
+                
                 if not Path(self._report_file).exists():
                     continue
-
+                
                 # Count lines in report file (skip header)
                 with open(self._report_file, 'r') as f:
                     current_count = sum(1 for line in f) - 1
-
-                # Only report if progress was made
+                
+                # Skip if no new progress
                 if current_count <= last_count:
                     continue
-
+                
+                now = time.time()
+                elapsed = now - start_time
+                
                 # Calculate metrics
-                elapsed = time.time() - start_time
                 rate = current_count / elapsed if elapsed > 0 else 0
-
+                
+                # Determine if we should log
+                should_log = False
+                log_interval = base_log_interval
+                
                 if self._expected_total > 0:
                     percent = (current_count / self._expected_total) * 100
                     eta = (self._expected_total - current_count) / rate if rate > 0 else 0
-                    self.log(
-                        f"Progress: {current_count}/{self._expected_total} ({percent:.1f}%) | "
-                        f"Rate: {rate:.2f} mol/s | ETA: {self._format_duration(eta)}"
-                    )
+                    
+                    # Adaptive log interval based on ETA
+                    if eta > 0:
+                        log_interval = min(max(base_log_interval, int(10 ** (math.log10(max(eta, 1)) - 1))), 1000)
+                    
+                    should_log = (now - last_log_time) >= log_interval
+                    
+                    if should_log:
+                        self.log(
+                            f"Progress: {current_count}/{self._expected_total} ({percent:.1f}%) | "
+                            f"Rate: {rate:.2f} mol/s | ETA: {self._format_duration(eta)}"
+                        )
                 else:
-                    self.log(
-                        f"Progress: {current_count} molecules processed | "
-                        f"Rate: {rate:.2f} mol/s | Elapsed: {self._format_duration(elapsed)}"
-                    )
-
-                last_count = current_count
-
-                # Adjust update interval based on ETA to avoid spam
-                if eta > 1:
-                    update_interval = min(max(10, int(10 ** (math.log10(eta) - 1))), 1000)
-
+                    should_log = (now - last_log_time) >= log_interval
+                    
+                    if should_log:
+                        self.log(
+                            f"Progress: {current_count} molecules processed | "
+                            f"Rate: {rate:.2f} mol/s | Elapsed: {self._format_duration(elapsed)}"
+                        )
+                
+                if should_log:
+                    last_log_time = now
+                    last_count = current_count
+                    has_logged = True
+                
             except Exception as e:
                 self.log(f"Progress monitoring error: {e}", level='DEBUG')
-                time.sleep(30)  # Wait longer if error occurred
+        
+        # Final report - only if we had progress and either:
+        # 1. Never logged (short process), OR
+        # 2. Logged before but final count differs from last logged count
+        try:
+            if Path(self._report_file).exists():
+                with open(self._report_file, 'r') as f:
+                    final_count = sum(1 for line in f) - 1
+                
+                # Only print final report if there's something to report and we haven't already reported completion
+                if final_count > 0 and (not has_logged or final_count > last_count):
+                    elapsed = time.time() - start_time
+                    rate = final_count / elapsed if elapsed > 0 else 0
+                    
+                    if self._expected_total > 0:
+                        percent = (final_count / self._expected_total) * 100
+                        self.log(
+                            f"Progress: {final_count}/{self._expected_total} ({percent:.1f}%) | "
+                            f"Rate: {rate:.2f} mol/s | Elapsed: {self._format_duration(elapsed)}"
+                        )
+                    else:
+                        self.log(
+                            f"Completed: {final_count} molecules | "
+                            f"Rate: {rate:.2f} mol/s | Elapsed: {self._format_duration(elapsed)}"
+                        )
+        except Exception:
+            pass
 
     def _format_duration(self, seconds: float) -> str:
         """Format duration in human-readable format."""
