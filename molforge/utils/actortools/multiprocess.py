@@ -65,12 +65,22 @@ def multiprocess_worker(chunk: List[Any],
     start_time = time.time()
     processed_count = 0
     
+    def method() -> str:
+        """
+        MP identifier for logging with consistent width.
+
+        Returns:
+            Formatted logging prefix (e.g. '[MULTIPROCESS]')
+        """
+        width = 13
+        name = 'MULTIPROCESS'
+        return f"[{name.upper():^{width}s}]"
     
     # Enhanced error tracking
     def log_error(message, level='ERROR'):
         try:
             if logger:
-                logger.log(level.lower(), '[MULTIP]', message)
+                logger.log(level.lower(), method(), message)
 
             print(f"WORKER {worker_pid}: {message}")
         except:

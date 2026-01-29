@@ -243,7 +243,7 @@ class PipeParams(BaseParams):
         
         config = filter_dict(self._get_params_dict())
         config_str = json.dumps(config, sort_keys=True, default=str)
-        return hashlib.sha256(config_str.encode()).hexdigest()[:length]
+        return hashlib.sha256(config_str.encode()).hexdigest()[:length].upper()
     
 # Clean user-facing API
 class ForgeParams(PipeParams):
