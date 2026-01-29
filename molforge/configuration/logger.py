@@ -114,10 +114,10 @@ class PipelineLogger:
         getattr(self.logger, level.lower())(message, *args, extra=extra, **kwargs)
     
 class BaseFormatter(logging.Formatter):
-    """Base formatter that abbreviates log levels and handles method field."""
+    """Base formatter that pads log levels to a fixed width and handles the method field."""
 
     def format(self, record):
-        # Abbreviate log level to 4 characters for consistent spacing
+        # Pad log level name to a left-aligned 8-character field for consistent spacing
         original_levelname = record.levelname
         record.levelname = f"{original_levelname:<8s}"  # Left-aligned, 8 chars
 
