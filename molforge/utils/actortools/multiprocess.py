@@ -70,7 +70,7 @@ def multiprocess_worker(chunk: List[Any],
         MP identifier for logging with consistent width.
 
         Returns:
-            Formatted logging prefix (e.g. '[MULTIPROCCESS]')
+            Formatted logging prefix (e.g. '[MULTIPROCESS]')
         """
         width = 13
         name = 'MULTIPROCESS'
