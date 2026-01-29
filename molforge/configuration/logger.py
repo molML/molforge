@@ -40,6 +40,9 @@ class PipelineLogger:
         self.file_level = file_level
         self.use_colors = use_colors
         
+        self.fmt = '%(asctime)s    | %(method)s | %(levelname)s | %(message)s'
+        self.datefmt = '%Y-%m-%d %H:%M:%S'
+
         self._setup_logger()
     
     def _setup_logger(self):
@@ -57,13 +60,13 @@ class PipelineLogger:
         
         if self.use_colors_enabled:
             console_formatter = ColoredFormatter(
-                fmt='%(asctime)s | %(method)8s | %(levelname)4s | %(message)s',
-                datefmt='%H:%M:%S'
+                fmt=self.fmt,
+                datefmt=self.datefmt
             )
         else:
-            console_formatter = logging.Formatter(
-                fmt='%(asctime)s | %(method)8s | %(levelname)4s | %(message)s',
-                datefmt='%H:%M:%S'
+            console_formatter = BaseFormatter(
+                fmt=self.fmt,
+                datefmt=self.datefmt
             )
         
         console_handler.setFormatter(console_formatter)
@@ -77,9 +80,9 @@ class PipelineLogger:
         """Add file handler with current log_file path."""
         file_handler = logging.FileHandler(self.log_file)
         file_handler.setLevel(getattr(logging, self.file_level.upper()))
-        file_formatter = logging.Formatter(
-            fmt='%(asctime)s | %(method)8s | %(levelname)4s | %(message)s', 
-            datefmt='%Y-%m-%d %H:%M:%S'
+        file_formatter = BaseFormatter(
+            fmt=self.fmt,
+            datefmt=self.datefmt
         )
         file_handler.setFormatter(file_formatter)
         self.logger.addHandler(file_handler)
@@ -91,36 +94,17 @@ class PipelineLogger:
             handler.close()  # Important: close the handler to release file resources
             self.logger.removeHandler(handler)
     
-    def update_logger(self, name: str = None, log_file: str = None):
-        """Update logger configuration and recreate handlers."""
-        config_changed = False
+    def update_logger(self, log_file: str = None):
+        """Update logger to write to a new log file."""
+        self._remove_file_handlers()
         
-        # Update name if provided
-        if name and name != self.name:
-            self.name = name
-            # Create a new logger instance with the new name
-            old_handlers = self.logger.handlers.copy()
-            self.logger = logging.getLogger(self.name)
-            self.logger.setLevel(logging.DEBUG)
-            
-            # Copy handlers to new logger (except file handlers, we'll recreate those)
-            for handler in old_handlers:
-                if not isinstance(handler, logging.FileHandler):
-                    self.logger.addHandler(handler)
-            
-            config_changed = True
-        
-        # Update log file if provided
-        if log_file and log_file != self.log_file:
+        if log_file:
             self.log_file = log_file
-            config_changed = True
-        
-        # If file logging is needed, remove old file handlers and add new one
-        if self.log_file:
-            self._remove_file_handlers()
             self._add_file_handler()
+        else:
+            self.log_file = None
         
-        return config_changed
+        return True
         
     def log(self, level: str, method: str, message: str, *args, **kwargs):
         """Internal logging method that adds method context."""
@@ -128,35 +112,35 @@ class PipelineLogger:
         extra = {'method': method}
         getattr(self.logger, level.lower())(message, *args, extra=extra, **kwargs)
     
-class ColoredFormatter(logging.Formatter):
-    """Custom formatter that adds colors to console output."""
-
-    # 4-letter abbreviations for consistent spacing
-    LEVEL_ABBREVIATIONS = {
-        'DEBUG': 'DBUG',
-        'INFO': 'INFO',
-        'WARNING': 'WARN',
-        'ERROR': 'ERRO',
-        'CRITICAL': 'CRIT'
-    }
+class BaseFormatter(logging.Formatter):
+    """Base formatter that abbreviates log levels and handles method field."""
 
     def format(self, record):
         # Abbreviate log level to 4 characters for consistent spacing
         original_levelname = record.levelname
-        record.levelname = self.LEVEL_ABBREVIATIONS.get(original_levelname, original_levelname[:4])
-
-        # Get the color for this level
-        color = PipelineLogger.COLORS.get(original_levelname, '')
-        reset = PipelineLogger.COLORS['RESET']
+        record.levelname = f"{original_levelname:<8s}"  # Left-aligned, 8 chars
 
         # Format the message
         formatted = super().format(record)
 
-        # Add color to the entire line
-        if color:
-            formatted = f"{color}{formatted}{reset}"
-
         # Restore original level name
         record.levelname = original_levelname
+
+        return formatted
+
+
+class ColoredFormatter(BaseFormatter):
+    """Formatter that adds colors to console output."""
+
+    def format(self, record):
+        # Get the base formatted message
+        formatted = super().format(record)
+
+        # Add color to the entire line
+        color = PipelineLogger.COLORS.get(record.levelname, '')
+        reset = PipelineLogger.COLORS['RESET']
+        
+        if color:
+            formatted = f"{color}{formatted}{reset}"
 
         return formatted
