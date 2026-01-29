@@ -101,8 +101,7 @@ def _generate_single_conformer(
             return (name, {
                 'success': False,
                 'n_conformers': 0,
-                'status': '',
-                'error': 'Invalid SMILES',
+                'status': 'Invalid SMILES',
                 'rotors': 0,
                 'elapsed_time': time.time() - start_time
             })
@@ -132,8 +131,7 @@ def _generate_single_conformer(
             return (name, {
                 'success': False,
                 'n_conformers': 0,
-                'status': '',
-                'error': 'Conformer embedding failed',
+                'status': 'Conformer embedding failed',
                 'rotors': rotors,
                 'elapsed_time': time.time() - start_time
             })
@@ -155,8 +153,7 @@ def _generate_single_conformer(
         return (name, {
             'success': True,
             'n_conformers': len(conf_ids),
-            'status': '',  # Empty like OMEGA successful generations
-            'error': None,
+            'status': '',
             'molecule': mol,
             'rotors': rotors,
             'elapsed_time': round(elapsed, 2)
@@ -166,8 +163,7 @@ def _generate_single_conformer(
         return (name, {
             'success': False,
             'n_conformers': 0,
-            'status': '',
-            'error': str(e),
+            'status': str(e),
             'rotors': 0,
             'elapsed_time': time.time() - start_time
         })
@@ -280,8 +276,7 @@ class RDKitBackend(ConformerBackend):
                         (name, {
                             'success': False,
                             'n_conformers': 0,
-                            'status': '',
-                            'error': f'Chunk processing error: {str(e)}',
+                            'status': f'Chunk processing error: {str(e)}',
                             'rotors': 0,
                             'elapsed_time': 0.0
                         })

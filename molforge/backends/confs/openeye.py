@@ -139,9 +139,8 @@ class OpenEyeBackend(ConformerBackend):
         for name in names_list:
             results[name] = {
                 'success': name in success_mols,
-                'n_conformers': 0,  # Will be filled from report
-                'status': 'SUCCESS' if name in success_mols else 'FAILED',
-                'error': None if name in success_mols else 'Generation failed'
+                'n_conformers': 0,
+                'status': '' if name in success_mols else 'Generation failed',
             }
 
         success_count = len(success_mols)
@@ -220,7 +219,7 @@ class OpenEyeBackend(ConformerBackend):
             "-verbose", "false",
             "-maxconfs", str(self.params.max_confs),
             "-rms", str(self.params.rms_threshold),
-            "-mpi_np", str(self.params.mpi_np),
+            "-mpi_np", str(self.params._resolved_mpi_np),
             "-useGPU", str(self.params.use_gpu).lower(),
             "-prefix", self._path_prefix,
             "-flipper", str(self.params.flipper).lower(),
@@ -316,68 +315,6 @@ class OpenEyeBackend(ConformerBackend):
             minutes = (seconds % 3600) / 60
             return f"{int(hours)}h{int(minutes)}m"
 
-    def _parse_omega_report(self, names_list: list[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Parse OMEGA report CSV to get generation results.
-
-        Args:
-            names_list: List of molecule names that were processed
-
-        Returns:
-            Dict mapping molecule names to generation results
-        """
-        def create_failure(status: str, error: str) -> Dict[str, Any]:
-            return {
-                'success': False,
-                'n_conformers': 0,
-                'status': status,
-                'error': error,
-                'rotors': 0,
-                'elapsed_time': 0.0,
-            }
-
-        if not Path(self._report_file).exists():
-            self.log("OMEGA report file not found", level='WARNING')
-            return {name: create_failure('REPORT_NOT_FOUND', 'Report file not found') 
-                    for name in names_list}
-
-        try:
-            df = pd.read_csv(self._report_file)
-            df = df[df['Molecule'].isin(names_list)].set_index('Molecule')
-            
-            # Fill NaN values with defaults
-            df['Conformers'] = df['Conformers'].fillna(0).astype(int)
-            df['Rotors'] = df['Rotors'].fillna(0).astype(int)
-            df['ElapsedTime(s)'] = df['ElapsedTime(s)'].fillna(0.0)
-            df['Status'] = df['Status'].fillna('SUCCESS')  # Empty status means success
-            
-            # Create success column
-            df['success'] = (df['Conformers'] > 0) & (df['Status'] == 'SUCCESS')
-            df['error'] = df.apply(lambda row: None if row['success'] else f"OMEGA status: {row['Status']}", axis=1)
-            
-            # Build results dict
-            results = {}
-            for name in names_list:
-                if name in df.index:
-                    row = df.loc[name]
-                    results[name] = {
-                        'success': row['success'],
-                        'n_conformers': row['Conformers'],
-                        'status': row['Status'],
-                        'error': row['error'],
-                        'rotors': row['Rotors'],
-                        'elapsed_time': row['ElapsedTime(s)'],
-                    }
-                else:
-                    results[name] = create_failure('NOT_IN_REPORT', 'Not in OMEGA report')
-            
-            return results
-
-        except Exception as e:
-            self.log(f"Failed to parse OMEGA report: {e}", level='ERROR')
-            return {name: create_failure('PARSE_ERROR', f'Report parse error: {str(e)}') 
-                    for name in names_list}
-        
     def get_endpoint(self) -> str:
         """
         Return path to conformer output file.

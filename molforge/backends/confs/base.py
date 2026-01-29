@@ -54,8 +54,7 @@ class ConformerBackend(Backend):
             Dict mapping names to results. Each result contains:
                 - 'success': bool - Whether generation succeeded
                 - 'n_conformers': int - Number of conformers generated
-                - 'status': str - Status message (e.g., 'SUCCESS', 'SMILES_PARSE_FAILED')
-                - 'error': Optional[str] - Error message if failed
+                - 'status': str - Status message (empty for success, error description for failure)
         """
         pass
 
