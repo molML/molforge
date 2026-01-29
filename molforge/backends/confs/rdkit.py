@@ -86,9 +86,8 @@ def _generate_single_conformer(
         Tuple of (name, result_dict) where result_dict contains:
             - success: bool
             - n_conformers: int
-            - status: str
-            - error: str or None
-            - molecule: Chem.Mol (if successful)
+            - status: str (empty for success, error description for failure)
+            - molecule: Chem.Mol (only if successful)
             - rotors: int
             - elapsed_time: float
     """
