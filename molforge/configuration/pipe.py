@@ -55,7 +55,7 @@ class ConstructPipe:
         """
         from ..configuration.steps import Steps        
         width = max(Steps.max_length(), 7)  # min 7 for backend tags
-        step_name = 'PIPELINE'
+        step_name = self._params._get_config_hash() if hasattr(self, 'run_id') else 'PIPELINE'
         
         return f"[{step_name.upper():^{width}s}]"
     
@@ -137,11 +137,9 @@ class ConstructPipe:
         self.log_path = Path(self.output_dir) / f"{self.run_id}.log"
         if self.log_path.exists():
             self.log_path.unlink()
-
-        config_changed = self.logger.update_logger(
-            name=self.run_id,
-            log_file=str(self.log_path)
-        )
+            
+        config_changed = self.logger.update_logger(log_file=str(self.log_path))
+        
         if not config_changed:
             self.print("Log path was not updated", level='WARNING')
         else:
@@ -167,12 +165,14 @@ class ConstructPipe:
         """Execute all pipeline steps with timing and context."""
         output, success, last_step, n_steps = initial_data, True, 'start', len(self.steps)
         pipeline_start_time = time.time()
-
+        
+        prog = 0
         for idx, step in enumerate(self.steps):
             if not success:
                 break
             # Start timing
-            self.print(f"[{idx+1}/{n_steps}] Starting {step}.")
+            self.print(f"{'█'*prog + '░'*(n_steps*2 - prog)} [{idx+1}/{n_steps}] Starting {step}.")
+
             step_start_time = time.time()
 
             # Execute step with context
@@ -188,10 +188,11 @@ class ConstructPipe:
                 self._save_output(output, f"{self.run_id}_{step}.csv")
 
             # Log step info
-            self.print(f"[{idx+1}/{n_steps}] Finished {step} | {status} | {length} rows | {step_duration}")
+            self.print(f"{'█'*(prog+1) + '░'*(n_steps*2 - (prog+1))} [{idx+1}/{n_steps}] Finished {step} | {status} | {length} rows | {step_duration}")
+            prog += 2
 
         # Total timing
-        self.print(f"Pipeline completed | Total time: {self._format_duration(time.time() - pipeline_start_time)}")
+        self.print(f"{'█'*(n_steps*2)} [{idx+1}/{n_steps}] Pipeline completed | Total time: {self._format_duration(time.time() - pipeline_start_time)}")
         return output, success, last_step
 
     def _execute_step(self, input_data: Any, step: str, context: PipelineContext) -> tuple[Any, bool]:
