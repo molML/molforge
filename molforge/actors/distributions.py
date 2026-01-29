@@ -358,11 +358,8 @@ class CurateDistribution(BaseActor):
             'num_atoms': lambda mol: mol.GetNumHeavyAtoms(),
             'num_rings': lambda mol: len(list(Chem.GetSSSR(mol))),
             'size_largest_ring': lambda mol: max([0] + [len(ring) for ring in mol.GetRingInfo().AtomRings()]),
-            'c_atom_ratio': lambda mol: self._compute_ratio(
-                sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() == 6),
-                mol.GetNumHeavyAtoms()
-            ),
-            'longest_aliph_c_chain': lambda mol: self._compute_longest_chain(mol),
+            'c_atom_ratio': lambda mol: self._compute_ratio(sum(1 for a in mol.GetAtoms() if a.GetAtomicNum() == 6), mol.GetNumHeavyAtoms()),
+            'longest_aliph_carbon': lambda mol: self._compute_longest_chain(mol),
             'molecular_weight': lambda mol: Descriptors.MolWt(mol),
             'logp': lambda mol: Descriptors.MolLogP(mol),
             'tpsa': lambda mol: Descriptors.TPSA(mol),
@@ -372,12 +369,8 @@ class CurateDistribution(BaseActor):
             'fsp3': lambda mol: Descriptors.FractionCSP3(mol),
             'num_aromatic_rings': lambda mol: Descriptors.NumAromaticRings(mol),
             'num_stereocenters': lambda mol: self._compute_stereocenters(mol),
-            'num_heteroatoms': lambda mol: sum(1 for atom in mol.GetAtoms() 
-                                              if atom.GetAtomicNum() not in [1, 6]),
-            'heteroatom_ratio': lambda mol: self._compute_ratio(
-                sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() not in [1, 6]),
-                mol.GetNumHeavyAtoms()
-            ),
+            'num_heteroatoms': lambda mol: sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() not in [1, 6]),
+            'heteroatom_ratio': lambda mol: self._compute_ratio(sum(1 for atom in mol.GetAtoms() if atom.GetAtomicNum() not in [1, 6]), mol.GetNumHeavyAtoms()),
         }
 
     @staticmethod
@@ -490,16 +483,24 @@ class CurateDistribution(BaseActor):
             if prop in df.columns:
                 values = df[prop].dropna()
                 if len(values) > 0:
-                    self._statistics_cache[prop] = {
+                    n_digits = 2
+
+                    stats = {
                         'count': len(values),
-                        'mean': values.mean(),
-                        'std': values.std(),
-                        'min': values.min(),
-                        'max': values.max(),
-                        'median': values.median(),
-                        'skewness': skew(values),
-                        'kurtosis': kurtosis(values),
+                        'mean': round(values.mean(), n_digits),
+                        'std': round(values.std(), n_digits),
+                        'min': round(values.min(), n_digits),
+                        'max': round(values.max(), n_digits),
+                        'median': round(values.median(), n_digits),
+                        'skewness': round(skew(values), n_digits),
+                        'kurtosis': round(kurtosis(values), n_digits),
                     }
+                    
+                    threshold = self.thresholds.get(prop)
+                    threshold_str = self._format_threshold(threshold, stats.get('mean'), stats.get('std'), values)
+
+                    stats['thresholds'] = threshold_str
+                    self._statistics_cache[prop] = stats
                         
     def _get_property_mask(self, df: pd.DataFrame, property_name: str, 
                         threshold: PropertyThreshold) -> pd.Series:
@@ -705,12 +706,7 @@ class CurateDistribution(BaseActor):
                     is_approx_normal = (abs(skew_val) < 1 and abs(kurt_val) < 2) if (
                         skew_val is not None and kurt_val is not None) else False
                     approx_normal_str = "✓" if is_approx_normal else "✗"
-                    
-                    # Get threshold configuration
-                    threshold = self.thresholds.get(prop)
-                    threshold_str = self._format_threshold(threshold, stats.get('mean'), 
-                                                          stats.get('std'), values)
-                    
+
                     stats_data.append({
                         'property': prop,
                         'count': stats.get('count', len(values)),
@@ -724,12 +720,11 @@ class CurateDistribution(BaseActor):
                         'symmetric [*]': approx_normal_str,
                         'normal [**]': normality_str,
                         'p_value': pvalue_str,
-                        'thresholds': threshold_str,
                     })
         
         if stats_data:
             stats_df = pd.DataFrame(stats_data)
-            self.log(f"\n{label}\n{stats_df.to_markdown(index=False)}")
+            self.log(f"{label}\n{stats_df.to_markdown(index=False)}")
             self.log(
                 "[*] Practical normality: Skewness and Kurtosis tests. "
                 "✓ = approximately normal (|skew|<1, |kurt|<2); ✗ = notably non-normal."
@@ -806,12 +801,16 @@ class CurateDistribution(BaseActor):
         
     def _show_filter_summary(self, filter_results: List[Dict], initial_count: int) -> None:
         """Display summary of filtering results per property."""
+        for result in filter_results:
+            stat = self._statistics_cache.get(result['property'], {})
+            result['thresholds'] = stat.get('thresholds', '—')
+        
         summary_df = pd.DataFrame(filter_results)
         summary_df['passed'] = summary_df['passed'].astype(str) + f"/{initial_count}"
         summary_df['pass_rate'] = summary_df['pass_rate'].round(1).astype(str) + "%"
         summary_df = summary_df.sort_values('removed', ascending=False)
         
-        self.log(f"\nFILTER RESULTS\n{summary_df.to_markdown(index=False)}")
+        self.log(f"FILTER RESULTS\n{summary_df.to_markdown(index=False)}")
     
     # ==================== Plotting ====================
     
@@ -977,7 +976,7 @@ class CurateDistribution(BaseActor):
         # Only logP can be negative
         non_negative_properties = {
             'num_atoms', 'num_rings', 'size_largest_ring', 'num_tokens',
-            'tokens_atom_ratio', 'c_atom_ratio', 'longest_aliph_c_chain',
+            'tokens_atom_ratio', 'c_atom_ratio', 'longest_aliph_carbon',
             'molecular_weight', 'tpsa', 'num_rotatable_bonds',
             'num_h_donors', 'num_h_acceptors', 'fsp3', 'num_aromatic_rings',
             'num_stereocenters', 'num_heteroatoms', 'heteroatom_ratio'

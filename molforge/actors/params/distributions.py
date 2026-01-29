@@ -120,7 +120,7 @@ class CurateDistributionParams(BaseParams):
     # Valid molecular properties
     _VALID_PROPERTIES: List[str] = field(default_factory=lambda: [
         "num_atoms", "num_rings", "size_largest_ring", "num_tokens",
-        "tokens_atom_ratio", "c_atom_ratio", "longest_aliph_c_chain",
+        "tokens_atom_ratio", "c_atom_ratio", "longest_aliph_carbon",
         "molecular_weight", "logp", "tpsa", "num_rotatable_bonds",
         "num_h_donors", "num_h_acceptors", "fsp3", "num_aromatic_rings",
         "num_stereocenters", "num_heteroatoms", "heteroatom_ratio"
