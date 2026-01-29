@@ -50,6 +50,9 @@ class GenerateConfsParams(BaseParams):
     convert_to_rdkit: bool = True
     """Convert conformers to RDKit Mol objects when extracting (OpenEye only, RDKit is native)"""
 
+    timeout: int = 3600
+    """Timeout for conformer generation execution in seconds"""
+    
     # ==================== RDKit-Specific Parameters ====================
     # These are only used when backend='rdkit'
 
@@ -94,9 +97,6 @@ class GenerateConfsParams(BaseParams):
 
     oeomega_path: Optional[str] = None
     """Path to OMEGA executable (OpenEye), None = auto-detect"""
-
-    timeout: int = 3600
-    """Timeout for conformer generation execution in seconds (OpenEye)"""
 
     # ==================== Advanced ====================
 

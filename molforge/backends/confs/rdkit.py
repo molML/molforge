@@ -184,8 +184,9 @@ class RDKitBackend(ConformerBackend):
     description = "Generate conformers using RDKit ETKDGv3 algorithm"
     required_params = ['SMILES_column']
     optional_params = [
-        'names_column', 'max_confs', 'n_jobs', 'rms_threshold',
-        'random_seed', 'verbose', 'dropna'
+        'names_column', 'max_confs', 'rms_threshold', 'dropna', 'timeout',
+        'use_random_coords', 'random_seed', 'num_threads',
+        'use_uff', 'max_iterations',
     ]
 
     def __init__(self, params, logger=None, context=None):
@@ -259,10 +260,10 @@ class RDKitBackend(ConformerBackend):
             }
 
             # Process as completed with progress reporting
-            for future in as_completed(future_to_chunk, timeout=3600):
+            for future in as_completed(future_to_chunk, timeout=self.params.timeout):
                 chunk_idx = future_to_chunk[future]
                 try:
-                    chunk_results[chunk_idx] = future.result(timeout=300)
+                    chunk_results[chunk_idx] = future.result(timeout=self.params.timeout)
                     completed_chunks += 1
 
                     # Report progress after each chunk
@@ -484,6 +485,3 @@ class RDKitBackend(ConformerBackend):
             self.log(f"Cannot extract names from file: failed to read output file: {e}", level='ERROR')
             return []
 
-    def clear(self):
-        """Clear stored molecules to free memory."""
-        self._molecules.clear()

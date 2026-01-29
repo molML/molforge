@@ -34,12 +34,12 @@ class OpenEyeBackend(ConformerBackend):
 
     # Backend metadata
     description = "Generate conformers using OpenEye OMEGA (requires license)"
-    required_params = ['SMILES_column', 'output_file']
+    required_params = ['SMILES_column']
     optional_params = [
-        'names_column', 'max_confs', 'rms_threshold', 'mode',
-        'verbose', 'dropna', 'timeout', 'mpi_np', 'use_gpu',
-        'flipper', 'flipper_warts', 'flipper_maxcenters', 'strict',
-        'oeomega_path', 'convert_to_rdkit'  
+        'names_column', 'max_confs', 'rms_threshold', 'dropna', 'timeout',
+        'mode', 'use_gpu', 'mpi_np', 'strict',
+        'flipper', 'flipper_warts', 'flipper_maxcenters',
+        'oeomega_path', 'convert_to_rdkit',
     ]
 
     def __init__(self, params, logger=None, context=None):
