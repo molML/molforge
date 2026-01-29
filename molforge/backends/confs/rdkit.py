@@ -86,9 +86,8 @@ def _generate_single_conformer(
         Tuple of (name, result_dict) where result_dict contains:
             - success: bool
             - n_conformers: int
-            - status: str
-            - error: str or None
-            - molecule: Chem.Mol (if successful)
+            - status: str (empty for success, error description for failure)
+            - molecule: Chem.Mol (only if successful)
             - rotors: int
             - elapsed_time: float
     """
@@ -101,8 +100,7 @@ def _generate_single_conformer(
             return (name, {
                 'success': False,
                 'n_conformers': 0,
-                'status': '',
-                'error': 'Invalid SMILES',
+                'status': 'Invalid SMILES',
                 'rotors': 0,
                 'elapsed_time': time.time() - start_time
             })
@@ -132,8 +130,7 @@ def _generate_single_conformer(
             return (name, {
                 'success': False,
                 'n_conformers': 0,
-                'status': '',
-                'error': 'Conformer embedding failed',
+                'status': 'Conformer embedding failed',
                 'rotors': rotors,
                 'elapsed_time': time.time() - start_time
             })
@@ -155,8 +152,7 @@ def _generate_single_conformer(
         return (name, {
             'success': True,
             'n_conformers': len(conf_ids),
-            'status': '',  # Empty like OMEGA successful generations
-            'error': None,
+            'status': '',
             'molecule': mol,
             'rotors': rotors,
             'elapsed_time': round(elapsed, 2)
@@ -166,8 +162,7 @@ def _generate_single_conformer(
         return (name, {
             'success': False,
             'n_conformers': 0,
-            'status': '',
-            'error': str(e),
+            'status': str(e),
             'rotors': 0,
             'elapsed_time': time.time() - start_time
         })
@@ -189,8 +184,9 @@ class RDKitBackend(ConformerBackend):
     description = "Generate conformers using RDKit ETKDGv3 algorithm"
     required_params = ['SMILES_column']
     optional_params = [
-        'names_column', 'max_confs', 'n_jobs', 'rms_threshold',
-        'random_seed', 'verbose', 'dropna'
+        'names_column', 'max_confs', 'rms_threshold', 'dropna', 'timeout',
+        'use_random_coords', 'random_seed', 'num_threads',
+        'use_uff', 'max_iterations',
     ]
 
     def __init__(self, params, logger=None, context=None):
@@ -264,10 +260,10 @@ class RDKitBackend(ConformerBackend):
             }
 
             # Process as completed with progress reporting
-            for future in as_completed(future_to_chunk, timeout=3600):
+            for future in as_completed(future_to_chunk, timeout=self.params.timeout):
                 chunk_idx = future_to_chunk[future]
                 try:
-                    chunk_results[chunk_idx] = future.result(timeout=300)
+                    chunk_results[chunk_idx] = future.result(timeout=self.params.timeout)
                     completed_chunks += 1
 
                     # Report progress after each chunk
@@ -280,8 +276,7 @@ class RDKitBackend(ConformerBackend):
                         (name, {
                             'success': False,
                             'n_conformers': 0,
-                            'status': '',
-                            'error': f'Chunk processing error: {str(e)}',
+                            'status': f'Chunk processing error: {str(e)}',
                             'rotors': 0,
                             'elapsed_time': 0.0
                         })
@@ -300,10 +295,10 @@ class RDKitBackend(ConformerBackend):
         for smiles, name in zip(smiles_list, names_list):
             result = results_dict[name]
 
-            # Build report entry (mimics OMEGA format)
+            # Build report entry (matches OMEGA format)
             report_data.append({
-                'Molecule': name,
-                'SMILES': smiles,
+                'Molecule': smiles,
+                'Title': name,
                 'Rotors': result.get('rotors', 0),
                 'Conformers': result['n_conformers'],
                 'ElapsedTime(s)': result.get('elapsed_time', 0.0),
@@ -452,16 +447,16 @@ class RDKitBackend(ConformerBackend):
                 continue
 
     def get_report_dataframe(self) -> pd.DataFrame:
-        """Get conformer generation report as DataFrame (mimics OMEGA format)."""
+        """Get conformer generation report as DataFrame (matches OMEGA format)."""
         if not Path(self._report_file).exists():
             self.log("Report file not found", level='WARNING')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
         try:
             return pd.read_csv(self._report_file)
         except Exception as e:
             self.log(f"Failed to read report file: {e}", level='ERROR')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
     def get_successful_names(self) -> list[str]:
         """Get list of successfully generated molecule names from pickle file."""
@@ -490,6 +485,3 @@ class RDKitBackend(ConformerBackend):
             self.log(f"Cannot extract names from file: failed to read output file: {e}", level='ERROR')
             return []
 
-    def clear(self):
-        """Clear stored molecules to free memory."""
-        self._molecules.clear()

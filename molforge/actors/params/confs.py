@@ -50,6 +50,9 @@ class GenerateConfsParams(BaseParams):
     convert_to_rdkit: bool = True
     """Convert conformers to RDKit Mol objects when extracting (OpenEye only, RDKit is native)"""
 
+    timeout: int = 3600
+    """Timeout for conformer generation execution in seconds"""
+    
     # ==================== RDKit-Specific Parameters ====================
     # These are only used when backend='rdkit'
 
@@ -126,9 +129,9 @@ class GenerateConfsParams(BaseParams):
         if self.backend == 'openeye' and self.oeomega_path is None:
             self.oeomega_path = self._find_omega_executable()
 
-        # Auto-detect CPU count for MPI if needed
-        if self.backend == 'openeye' and self.mpi_np == -1:
-            self.mpi_np = max(1, mp.cpu_count() - 1)
+        # Auto-detect CPU count for MPI if needed (private to avoid leaking into config hash)
+        if self.backend == 'openeye':
+            self._resolved_mpi_np = self.mpi_np if self.mpi_np != -1 else max(1, mp.cpu_count() - 1)
 
     def _find_omega_executable(self) -> str:
         """

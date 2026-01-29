@@ -34,10 +34,12 @@ class OpenEyeBackend(ConformerBackend):
 
     # Backend metadata
     description = "Generate conformers using OpenEye OMEGA (requires license)"
-    required_params = ['SMILES_column', 'output_file']
+    required_params = ['SMILES_column']
     optional_params = [
-        'names_column', 'max_confs', 'rms_threshold', 'mode',
-        'verbose', 'dropna'
+        'names_column', 'max_confs', 'rms_threshold', 'dropna', 'timeout',
+        'mode', 'use_gpu', 'mpi_np', 'strict',
+        'flipper', 'flipper_warts', 'flipper_maxcenters',
+        'oeomega_path', 'convert_to_rdkit',
     ]
 
     def __init__(self, params, logger=None, context=None):
@@ -61,7 +63,7 @@ class OpenEyeBackend(ConformerBackend):
 
         self.log(
             f"OpenEye OMEGA initialized: mode={params.mode}, "
-            f"max_confs={params.max_confs}, gpu={params.use_gpu}"
+            f"max_confs={params.max_confs}, gpu={params.use_gpu}, timeout={params.timeout}s"
         )
 
     def _validate_omega_installation(self):
@@ -137,9 +139,8 @@ class OpenEyeBackend(ConformerBackend):
         for name in names_list:
             results[name] = {
                 'success': name in success_mols,
-                'n_conformers': 0,  # Will be filled from report
-                'status': 'SUCCESS' if name in success_mols else 'FAILED',
-                'error': None if name in success_mols else 'Generation failed'
+                'n_conformers': 0,
+                'status': '' if name in success_mols else 'Generation failed',
             }
 
         success_count = len(success_mols)
@@ -185,16 +186,19 @@ class OpenEyeBackend(ConformerBackend):
             return []
 
     def get_report_dataframe(self) -> pd.DataFrame:
-        """Get OMEGA report as DataFrame (matches original)."""
+        """Get OMEGA report as DataFrame.
+
+        OMEGA native format: Molecule (SMILES), Title (name), Rotors, Conformers, ElapsedTime(s), Status
+        """
         if not Path(self._report_file).exists():
             self.log("OMEGA report file not found", level='WARNING')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
         try:
             return pd.read_csv(self._report_file)
         except Exception as e:
             self.log(f"Failed to read OMEGA report: {e}", level='ERROR')
-            return pd.DataFrame(columns=['Molecule', 'SMILES', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
+            return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
     def _execute_omega(self):
         """Execute OMEGA conformer generation with progress monitoring."""
@@ -215,7 +219,7 @@ class OpenEyeBackend(ConformerBackend):
             "-verbose", "false",
             "-maxconfs", str(self.params.max_confs),
             "-rms", str(self.params.rms_threshold),
-            "-mpi_np", str(self.params.mpi_np),
+            "-mpi_np", str(self.params._resolved_mpi_np),
             "-useGPU", str(self.params.use_gpu).lower(),
             "-prefix", self._path_prefix,
             "-flipper", str(self.params.flipper).lower(),
@@ -231,7 +235,7 @@ class OpenEyeBackend(ConformerBackend):
                 check=False,
                 stdout=False,
                 stderr=False,
-                timeout=3600  # 1 hour timeout
+                timeout=self.params.timeout  # 1 hour timeout
             )
 
             # Signal progress monitoring to stop
@@ -310,71 +314,6 @@ class OpenEyeBackend(ConformerBackend):
             hours = seconds // 3600
             minutes = (seconds % 3600) / 60
             return f"{int(hours)}h{int(minutes)}m"
-
-    def _parse_omega_report(self, names_list: list[str]) -> Dict[str, Dict[str, Any]]:
-        """
-        Parse OMEGA report CSV to get generation results.
-
-        Args:
-            names_list: List of molecule names that were processed
-
-        Returns:
-            Dict mapping molecule names to generation results
-        """
-        results = {}
-
-        if not Path(self._report_file).exists():
-            self.log("OMEGA report file not found", level='WARNING')
-            # Return failure for all molecules
-            for name in names_list:
-                results[name] = {
-                    'success': False,
-                    'n_conformers': 0,
-                    'status': 'REPORT_NOT_FOUND',
-                    'error': 'Report file not found'
-                }
-            return results
-
-        # Parse CSV report
-        try:
-            df = pd.read_csv(self._report_file)
-
-            for name in names_list:
-                # Find this molecule in report
-                row = df[df['Molecule'] == name]
-
-                if len(row) == 0:
-                    results[name] = {
-                        'success': False,
-                        'n_conformers': 0,
-                        'status': 'NOT_IN_REPORT',
-                        'error': 'Not in OMEGA report'
-                    }
-                else:
-                    row = row.iloc[0]
-                    status = row.get('Status', 'UNKNOWN')
-                    n_confs = int(row.get('conformers', 0))
-                    success = (n_confs > 0 and status == 'SUCCESS')
-
-                    results[name] = {
-                        'success': success,
-                        'n_conformers': n_confs,
-                        'status': status,
-                        'error': None if success else f'OMEGA status: {status}'
-                    }
-
-        except Exception as e:
-            self.log(f"Failed to parse OMEGA report: {e}", level='ERROR')
-            # Return failure for all
-            for name in names_list:
-                results[name] = {
-                    'success': False,
-                    'n_conformers': 0,
-                    'status': 'PARSE_ERROR',
-                    'error': f'Report parse error: {str(e)}'
-                }
-
-        return results
 
     def get_endpoint(self) -> str:
         """

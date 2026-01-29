@@ -77,18 +77,18 @@ class GenerateConfs(BaseActor):
         """
         Columns added to output DataFrame.
 
-        Backend report columns (merged from generation):
-            - Molecule: Molecule identifier used for conformer generation
+        Backend report columns (merged from generation, matches OMEGA format):
+            - Molecule: SMILES string used for conformer generation
+            - Title: Molecule identifier/name used during generation
             - Rotors: Number of rotatable bonds detected
-            - n_conformers: Number of conformers successfully generated
+            - n_conformers: Number of conformers successfully generated (renamed from Conformers)
             - ElapsedTime(s): Generation time in seconds
             - Status: Backend-specific status message (empty for success)
-            - SMILES: Input SMILES string (for verification)
 
         Actor-added columns:
             - conformer_success: Boolean flag indicating successful generation
         """
-        return ['Molecule', 'Rotors', 'n_conformers', 'ElapsedTime(s)', 'Status', 'conformer_success']
+        return ['Molecule', 'Title', 'Rotors', 'n_conformers', 'ElapsedTime(s)', 'Status', 'conformer_success']
 
     def process(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -102,15 +102,15 @@ class GenerateConfs(BaseActor):
         """
         df = data.copy()
 
-        # Check for conf_names column conflict
-        conf_names = self.output_columns[0]  # Column name from backend reports
-        if conf_names in df.columns:
+        # Title column is the name used during conformer generation (matches OMEGA format)
+        title_col = self.output_columns[1]
+        if title_col in df.columns:
             raise ValueError(
-                f"DataFrame contains '{conf_names}' column which will conflict with conformer readout. "
+                f"DataFrame contains '{title_col}' column which will conflict with conformer report. "
                 f"Please rename this column before conformer generation."
             )
 
-        # Setup conformer names for mapping results
+        # Setup Title column for mapping results
         # Handle cases where names_column doesn't exist or has duplicates
         if (self.names_column not in df.columns) or \
            (len(df[self.names_column].unique()) != len(df)):
@@ -119,13 +119,13 @@ class GenerateConfs(BaseActor):
                 f"Using enumeration for naming.",
                 level='WARNING'
             )
-            df[conf_names] = [f'{self.backend.upper()}_{i}' for i in range(len(df))]
+            df[title_col] = [f'{self.backend.upper()}_{i}' for i in range(len(df))]
         else:
-            df[conf_names] = df[self.names_column]
+            df[title_col] = df[self.names_column]
 
         # Extract SMILES and names as lists
         smiles_list = df[self.SMILES_column].tolist()
-        names_list = df[conf_names].tolist()
+        names_list = df[title_col].tolist()
 
         self.log(f"Generating conformers for {len(df)} SMILES")
 
@@ -136,18 +136,17 @@ class GenerateConfs(BaseActor):
         report_df = self.backend_instance.get_report_dataframe()
         success_names = self.backend_instance.get_successful_names()
 
-        # Merge report into DataFrame (matches original implementation)
+        # Merge report into DataFrame on Title column
         df = pd.merge(
             df,
             report_df,
-            left_on=conf_names,
-            right_on=conf_names,
+            on=title_col,
             how='left',
             suffixes=('', f' ({self.backend.upper()})')
         )
 
         # Mark conformer success based on presence in successful names
-        df['conformer_success'] = df[conf_names].isin(success_names)
+        df['conformer_success'] = df[title_col].isin(success_names)
 
         # Rename 'Conformers' column to 'n_conformers' for consistency
         if 'Conformers' in df.columns:

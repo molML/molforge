@@ -54,8 +54,7 @@ class ConformerBackend(Backend):
             Dict mapping names to results. Each result contains:
                 - 'success': bool - Whether generation succeeded
                 - 'n_conformers': int - Number of conformers generated
-                - 'status': str - Status message (e.g., 'SUCCESS', 'SMILES_PARSE_FAILED')
-                - 'error': Optional[str] - Error message if failed
+                - 'status': str - Status message (empty for success, error description for failure)
         """
         pass
 
@@ -90,7 +89,13 @@ class ConformerBackend(Backend):
         Get full conformer generation report as DataFrame.
 
         Returns:
-            DataFrame with columns: Molecule, SMILES, Rotors, Conformers, ElapsedTime(s), Status
+            DataFrame with columns matching OMEGA format:
+                - Molecule: SMILES string
+                - Title: Molecule name/identifier
+                - Rotors: Rotatable bond count
+                - Conformers: Number of conformers generated
+                - ElapsedTime(s): Generation time
+                - Status: Status message (empty string for success)
         """
         pass
 
