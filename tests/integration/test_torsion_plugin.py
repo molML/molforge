@@ -6,8 +6,7 @@ Tests torsion calculations with both RDKit and OpenEye conformers.
 
 import pytest
 import pandas as pd
-import ast
-from rdkit import Chem
+import json
 
 from molforge.actors.confs import GenerateConfs
 from molforge.actors.params.confs import GenerateConfsParams
@@ -86,11 +85,11 @@ class TestTorsionPluginRDKit:
         actor_input = ActorInput(data=torsion_test_data, context=pipeline_context)
         confs_output = confs_actor(actor_input)
 
-        # Step 2: Analyze torsions
+        # Step 2: Analyze torsions (dropna=False to keep all rows for assertions)
         torsion_params = CalculateTorsionsParams(
-            device='cpu',
             account_for_symmetry=True,
-            symmetry_radius=3
+            symmetry_radius=3,
+            dropna=False
         )
 
         torsion_actor = CalculateTorsions(torsion_params, logger=logger)
@@ -109,6 +108,7 @@ class TestTorsionPluginRDKit:
         # Check all expected columns exist
         assert 'torsion_smiles' in df.columns
         assert 'torsion_mapping' in df.columns
+        assert 'torsion_success' in df.columns
         assert 'n_confs' in df.columns
         assert 'n_torsions' in df.columns
         assert 'n_rotor_torsions' in df.columns
@@ -128,15 +128,15 @@ class TestTorsionPluginRDKit:
         for idx, row in df.iterrows():
             mol_id = row['molecule_id']
 
-            # Check torsion_mapping is serialized string
+            # Check torsion_mapping is serialized JSON string
             assert isinstance(row['torsion_mapping'], str)
 
             # Deserialize for content checks
-            torsion_mapping = ast.literal_eval(row['torsion_mapping'])
+            torsion_mapping = json.loads(row['torsion_mapping'])
             assert isinstance(torsion_mapping, dict)
 
             # Molecules with conformers should have torsions
-            if row['conformer_success']:
+            if row['torsion_success']:
                 # Check torsion_smiles present
                 assert isinstance(row['torsion_smiles'], str)
                 assert len(row['torsion_smiles']) > 0
@@ -147,7 +147,7 @@ class TestTorsionPluginRDKit:
                 # Ibuprofen molecules should have rotatable torsions
                 if 'ibuprofen' in mol_id:
                     assert row['n_rotor_torsions'] > 0
-                    assert len(torsion_mapping) > 0
+                    assert len(torsion_mapping.get('canonical_atom_ranks', [])) > 0
 
     def test_torsion_handles_failures(self, logger, pipeline_context):
         """Test torsion actor handles molecules without conformers."""
@@ -170,8 +170,8 @@ class TestTorsionPluginRDKit:
         actor_input = ActorInput(data=test_data, context=pipeline_context)
         confs_output = confs_actor(actor_input)
 
-        # Analyze torsions (should handle gracefully)
-        torsion_params = CalculateTorsionsParams()
+        # Analyze torsions (dropna=False to retain failed rows for assertions)
+        torsion_params = CalculateTorsionsParams(dropna=False)
         torsion_actor = CalculateTorsions(torsion_params, logger=logger)
 
         # Register actors in context
@@ -185,9 +185,12 @@ class TestTorsionPluginRDKit:
         assert torsion_output.success
         df = torsion_output.data
 
+        # All rows should have failed
+        assert not df['torsion_success'].any()
+
         # All values should be 0 or empty
         for idx, row in df.iterrows():
-            torsion_mapping = ast.literal_eval(row['torsion_mapping'])
+            torsion_mapping = json.loads(row['torsion_mapping'])
             assert torsion_mapping == {}
             assert row['torsion_smiles'] == ""
             assert row['n_confs'] == 0
@@ -227,7 +230,7 @@ class TestTorsionPluginRDKit:
 
         # Verify deserialization works
         for mapping_str in df['torsion_mapping']:
-            mapping = ast.literal_eval(mapping_str)
+            mapping = json.loads(mapping_str)
             assert isinstance(mapping, dict)
 
 
@@ -255,9 +258,9 @@ class TestTorsionPluginOpenEye:
 
         # Step 2: Analyze torsions (should handle OpenEye molecules)
         torsion_params = CalculateTorsionsParams(
-            device='cpu',
             account_for_symmetry=True,
-            symmetry_radius=3
+            symmetry_radius=3,
+            dropna=False
         )
 
         torsion_actor = CalculateTorsions(torsion_params, logger=logger)
@@ -275,17 +278,18 @@ class TestTorsionPluginOpenEye:
 
         # Check all expected columns exist
         assert 'torsion_mapping' in df.columns
+        assert 'torsion_success' in df.columns
         assert 'n_torsions' in df.columns
 
         # Validate OpenEye molecules processed correctly
         for idx, row in df.iterrows():
-            if row['conformer_success']:
+            if row['torsion_success']:
                 # Should have torsions
                 assert row['n_torsions'] >= 0
                 assert isinstance(row['torsion_mapping'], str)
 
                 # Verify deserialization
-                torsion_mapping = ast.literal_eval(row['torsion_mapping'])
+                torsion_mapping = json.loads(row['torsion_mapping'])
                 assert isinstance(torsion_mapping, dict)
 
     def test_torsion_with_openeye_conformers_with_conversion(self, torsion_test_data, logger, pipeline_context):
@@ -306,7 +310,7 @@ class TestTorsionPluginOpenEye:
         confs_output = confs_actor(actor_input)
 
         # Step 2: Analyze torsions (RDKit molecules)
-        torsion_params = CalculateTorsionsParams()
+        torsion_params = CalculateTorsionsParams(dropna=False)
         torsion_actor = CalculateTorsions(torsion_params, logger=logger)
 
         # Register actors in context
@@ -322,10 +326,10 @@ class TestTorsionPluginOpenEye:
 
         # Validate results
         for idx, row in df.iterrows():
-            if row['conformer_success']:
+            if row['torsion_success']:
                 assert isinstance(row['torsion_mapping'], str)
                 assert row['n_torsions'] >= 0
 
                 # Verify deserialization
-                torsion_mapping = ast.literal_eval(row['torsion_mapping'])
+                torsion_mapping = json.loads(row['torsion_mapping'])
                 assert isinstance(torsion_mapping, dict)
