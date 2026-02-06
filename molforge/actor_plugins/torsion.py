@@ -63,6 +63,15 @@ class CalculateTorsionsParams(BaseParams):
     symmetry_radius: int = 3
     ignore_colinear_bonds: bool = True
     n_confs_threshold: int = 50
+    min_confs: Optional[int] = None
+    """Hard minimum conformer count. Molecules below this are treated as
+    failures and removed from results. None disables this filter.
+    Distinct from n_confs_threshold, which only flags an informational warning."""
+    dropna: bool = True
+    """Drop rows where torsion analysis failed. Failures include: torsion
+    computation errors (malformed molecule, no torsions), SMILES reconstruction
+    failures, bond canonicalization errors, and min_confs violations.
+    Rows without upstream conformers are also dropped."""
 
     def _validate_params(self) -> None:
         """Validate parameter values."""
@@ -74,6 +83,9 @@ class CalculateTorsionsParams(BaseParams):
 
         if self.n_confs_threshold < 1:
             raise ValueError("Conformer threshold must be at least 1")
+
+        if self.min_confs is not None and self.min_confs < 1:
+            raise ValueError("min_confs must be at least 1")
 
 
 # ============================================================================
@@ -255,6 +267,14 @@ class CalculateTorsions(BaseActor):
                 "Ensure GenerateConfs runs before CalculateTorsions."
             )
 
+        # Intake summary
+        n_with_confs = int(df['conformer_success'].sum())
+        n_without_confs = len(df) - n_with_confs
+        self.log(
+            f"Received {len(df):,} molecules "
+            f"({n_with_confs:,} with conformers, {n_without_confs:,} without)."
+        )
+
         # Get molecule generator (streams molecules, no memory load)
         mol_generator = gc_actor.extract_molecules()
 
@@ -269,7 +289,7 @@ class CalculateTorsions(BaseActor):
         for col, values in torsion_stats.items():
             df[col] = values
 
-        # Failure summary
+        # Report: torsion-specific failures (not upstream)
         failed = df[~df['torsion_success'] & df['conformer_success']]
         if len(failed) > 0:
             failure_types = failed['warnings'].apply(
@@ -281,6 +301,24 @@ class CalculateTorsions(BaseActor):
                 f"{summary.to_frame('count').to_markdown()}",
                 level='WARNING'
             )
+
+        # Report: low conformer warnings (informational, not failures)
+        successful = df[df['torsion_success']]
+        n_low_confs = int(successful['low_confs'].sum()) if len(successful) > 0 else 0
+        if n_low_confs > 0:
+            self.log(
+                f"{n_low_confs:,} successful molecules flagged with low conformer "
+                f"count (< {self.n_confs_threshold}). Results may be less "
+                f"statistically reliable for these molecules."
+            )
+
+        # Drop failed rows if requested
+        if self.dropna:
+            initial_count = len(df)
+            df = df[df['torsion_success']]
+            dropped = initial_count - len(df)
+            if dropped > 0:
+                self.log(f"Dropped {dropped:,} rows with failed torsion analysis")
 
         return df
 
@@ -437,6 +475,17 @@ class CalculateTorsions(BaseActor):
             # Validate and pickle successful results
             if result[3]:  # success flag from worker
                 _, mapping, stats, _, smiles = result
+
+                # Check minimum conformer requirement (hard cutoff)
+                if self.min_confs is not None and stats['n_confs'] < self.min_confs:
+                    stats = dict(stats)
+                    stats['warnings'] = stats.get('warnings', []) + [
+                        f"Minimum conformers: {stats['n_confs']} < {self.min_confs}"
+                    ]
+                    result = (row_idx, {}, stats, False, "")
+                    ordered_results.append(result)
+                    continue
+
                 mol_obj = Chem.MolFromSmiles(smiles, smiles_params)
 
                 if mol_obj is None:
