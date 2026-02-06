@@ -7,8 +7,9 @@ Requires phd-tools package for calculations.
 
 from typing import List, Tuple, Dict, Optional, Literal, Iterator, Any
 import pickle
-import multiprocessing as mp
 from pathlib import Path
+import json
+import time
 import gc
 import os
 
@@ -20,24 +21,18 @@ from joblib import Parallel, delayed
 try:
     from phd_tools.chemistry.torsion import TorsionCalculator
     from phd_tools.chemistry.savebonds import CanonicalBondProperties
-    from phd_tools.chemistry.convert import MoleculeConverter, HAS_OPENEYE
     TORSION_AVAILABLE = True
 except ImportError:
     TORSION_AVAILABLE = False
     TorsionCalculator = None
     CanonicalBondProperties = None
-    MoleculeConverter = None
-    HAS_OPENEYE = False
-
-if HAS_OPENEYE:
-    from openeye import oechem
 
 
 # Plugin imports
 from molforge.actors.base import BaseActor
 from molforge.actors.protocol import ActorOutput
 from molforge.actors.params.base import BaseParams
-from molforge.utils.constants import MAX_CHUNK_SIZE
+from molforge.utils.constants import MAX_CHUNK_SIZE, DEFAULT_MP_THRESHOLD, DEFAULT_N_JOBS
 
 from dataclasses import dataclass
 
@@ -45,9 +40,6 @@ from dataclasses import dataclass
 # ============================================================================
 # CONSTANTS
 # ============================================================================
-
-# Number of worker processes (leave one core for system)
-N_WORKERS = max(1, mp.cpu_count() - 1)
 
 # Chunk size for parallel processing (from molforge constants)
 CHUNK_SIZE = MAX_CHUNK_SIZE
@@ -105,6 +97,10 @@ def _process_batch_worker(
     Returns:
         List of (row_idx, canonical_mapping, stats, success, torsion_smiles) tuples
     """
+    # Prevent PyTorch OpenMP thread oversubscription in forked workers
+    import torch
+    torch.set_num_threads(1)
+
     # Instantiate calculator once per worker (reused for all molecules in batch)
     calculator = TorsionCalculator(**calculator_config)
 
@@ -115,28 +111,22 @@ def _process_batch_worker(
             continue
 
         try:
-            # Compute torsions
-            bond_variance, stats = calculator.compute(mol)
-
-            # Get RDKit topology for canonicalization
-            if HAS_OPENEYE and isinstance(mol, oechem.OEMol):
-                rd_topology = MoleculeConverter.openeye_to_rdkit_topology(mol)
-            else:
-                rd_topology = mol
+            # Compute torsions (rd_topology returned to avoid duplicate conversion)
+            bond_variance, stats, rd_topology = calculator.compute(mol)
 
             # Canonicalize bond indices
             canonical_mapping = CanonicalBondProperties.bond_idx_to_canonical(
                 rd_topology, bond_variance
             )
 
-            # Generate SMILES with explicit hydrogens
-            torsion_smiles = Chem.MolToSmiles(rd_topology)#, allHsExplicit=True)
+            # Generate SMILES for molecule reconstruction
+            torsion_smiles = Chem.MolToSmiles(rd_topology)
 
             results.append((row_idx, canonical_mapping, stats, True, torsion_smiles))
 
         except Exception as e:
             error_stats = _empty_stats()
-            error_stats['warnings'] = [f"{type(e).__name__}: {str(e)}"]
+            error_stats['warnings'] = [f"Torsion computation: {type(e).__name__}: {str(e)}"]
             results.append((row_idx, {}, error_stats, False, ""))
 
     return results
@@ -175,7 +165,7 @@ class CalculateTorsions(BaseActor):
 
     Output columns:
         - torsion_smiles: SMILES with explicit hydrogens for molecule reconstruction
-        - torsion_mapping: Canonical bond flexibility mapping {(rank1, rank2): variance} (serialized)
+        - torsion_mapping: JSON with 'canonical_atom_ranks' and 'circular_variance'
         - torsion_success: Boolean flag for successful torsion calculation
         - n_confs: Number of conformers analyzed
         - n_torsions: Total torsions detected
@@ -240,7 +230,7 @@ class CalculateTorsions(BaseActor):
 
         self.log(
             f"Torsion analysis initialized "
-            f"(workers: {N_WORKERS}, chunk_size: {CHUNK_SIZE:,})"
+            f"(workers: {DEFAULT_N_JOBS}, chunk_size: {CHUNK_SIZE:,})"
         )
 
     def process(self, data: pd.DataFrame) -> pd.DataFrame:
@@ -279,6 +269,19 @@ class CalculateTorsions(BaseActor):
         for col, values in torsion_stats.items():
             df[col] = values
 
+        # Failure summary
+        failed = df[~df['torsion_success'] & df['conformer_success']]
+        if len(failed) > 0:
+            failure_types = failed['warnings'].apply(
+                lambda w: w[0].split(':')[0] if w else 'Unknown'
+            )
+            summary = failure_types.value_counts()
+            self.log(
+                f"Failure summary ({len(failed):,} torsion failures):\n"
+                f"{summary.to_frame('count').to_markdown()}",
+                level='WARNING'
+            )
+
         return df
 
     def _process_chunked(
@@ -288,7 +291,10 @@ class CalculateTorsions(BaseActor):
         total_rows: int,
     ) -> Dict[str, List]:
         """
-        Process molecules in parallel chunks with incremental output.
+        Process molecules in chunks with optional parallelism.
+
+        Uses single-process mode for small datasets (< DEFAULT_MP_THRESHOLD)
+        and parallel processing for larger ones.
 
         Args:
             molecules: Generator yielding successful molecules
@@ -298,15 +304,28 @@ class CalculateTorsions(BaseActor):
         Returns:
             Dictionary mapping column names to lists of values
         """
-        # Initialize result collectors
         results = {col: [] for col in self.OUTPUT_COLUMNS}
+        n_with_conformers = int(success_mask.sum())
+        use_mp = n_with_conformers >= DEFAULT_MP_THRESHOLD
+        total_chunks = (total_rows + CHUNK_SIZE - 1) // CHUNK_SIZE
 
-        # Track chunk statistics
+        # Dispatch log (matches curate actor format)
+        if use_mp:
+            self.log(
+                f"Processing {total_rows:,} molecules ({n_with_conformers:,} with conformers) "
+                f"with {DEFAULT_N_JOBS} workers ({total_chunks} chunks of {CHUNK_SIZE:,})."
+            )
+        else:
+            self.log(
+                f"Processing {total_rows:,} molecules ({n_with_conformers:,} with conformers) "
+                f"in single process."
+            )
+
         chunk_idx = 0
         processed_count = 0
-
-        # Collect molecules with their row indices
-        chunk_data = []  # List of (row_idx, mol or None)
+        chunk_data = []
+        pipeline_start = time.time()
+        chunk_times = []
 
         for row_idx, has_conformers in enumerate(success_mask):
             if has_conformers:
@@ -317,78 +336,97 @@ class CalculateTorsions(BaseActor):
                     self.log(f"Generator exhausted at row {row_idx}", level='ERROR')
                     chunk_data.append((row_idx, None))
             else:
-                # No conformer - will use empty result
                 chunk_data.append((row_idx, None))
 
             # Process chunk when full or at end
             if len(chunk_data) >= CHUNK_SIZE or row_idx == total_rows - 1:
                 if chunk_data:
-                    chunk_results = self._process_chunk(chunk_data, chunk_idx)
-                    self._append_results(results, chunk_results)
+                    chunk_start = time.time()
+                    chunk_results = self._process_chunk(
+                        chunk_data, chunk_idx, use_mp
+                    )
+                    chunk_time = time.time() - chunk_start
+                    chunk_times.append(chunk_time)
 
+                    self._append_results(results, chunk_results)
                     processed_count += len(chunk_data)
+
+                    # Per-chunk progress
+                    elapsed = time.time() - pipeline_start
+                    rate = processed_count / elapsed if elapsed > 0 else 0
                     self.log(
-                        f"Processed chunk {chunk_idx}: "
-                        f"{processed_count:,}/{total_rows:,} molecules"
+                        f"Chunk {chunk_idx + 1}/{total_chunks} | "
+                        f"{processed_count:,}/{total_rows:,} "
+                        f"({100 * processed_count / total_rows:.1f}%) | "
+                        f"Rate: {rate:.0f} mol/s | Chunk: {chunk_time:.1f}s"
                     )
 
                     chunk_data = []
                     chunk_idx += 1
                     gc.collect()
 
-        self.log(f"Completed: {processed_count:,} molecules in {chunk_idx} chunks")
+        # Completion summary
+        total_time = time.time() - pipeline_start
+        avg_chunk = sum(chunk_times) / len(chunk_times) if chunk_times else 0
+        self.log(
+            f"Completed: {processed_count:,} molecules in {chunk_idx} chunks "
+            f"({total_time:.1f}s total, avg {avg_chunk:.1f}s/chunk)"
+        )
         return results
 
     def _process_chunk(
         self,
         chunk_data: List[Tuple[int, Any]],
         chunk_idx: int,
+        use_mp: bool = True,
     ) -> List[Tuple]:
         """
-        Process a chunk of molecules in parallel.
+        Process a chunk of molecules, optionally in parallel.
 
-        Splits molecules into N_WORKERS batches for efficient parallelization,
-        minimizing serialization overhead by processing many molecules per worker.
+        When use_mp is True, splits molecules into DEFAULT_N_JOBS batches
+        for parallel processing. Otherwise processes sequentially in-process.
 
         Args:
             chunk_data: List of (row_idx, molecule) tuples
             chunk_idx: Chunk index for logging/saving
+            use_mp: Whether to use multiprocessing
 
         Returns:
             List of result tuples, ordered by row_idx
         """
-        # Separate molecules that need processing from empty ones
         to_process = [(idx, mol) for idx, mol in chunk_data if mol is not None]
         empty_indices = {idx for idx, mol in chunk_data if mol is None}
 
-        # Process non-empty molecules in parallel using batch-per-worker
         processed_results = {}
 
         if to_process:
-            self.log(f"Splitting {len(to_process)} items into {N_WORKERS} batches of size ~{len(to_process) // N_WORKERS}")
-            # Split into N_WORKERS batches for efficient parallelization
-            batches = self._split_into_batches(to_process, N_WORKERS)
+            if use_mp:
+                batches = self._split_into_batches(to_process, DEFAULT_N_JOBS)
+                batch_results = Parallel(n_jobs=DEFAULT_N_JOBS)(
+                    delayed(_process_batch_worker)(batch, self._calculator_config)
+                    for batch in batches
+                )
+            else:
+                # Single-process: call worker directly (no IPC overhead)
+                batch_results = [
+                    _process_batch_worker(to_process, self._calculator_config)
+                ]
 
-            # Each worker processes a full batch (thousands of molecules)
-            batch_results = Parallel(n_jobs=N_WORKERS)(
-                delayed(_process_batch_worker)(batch, self._calculator_config)
-                for batch in batches
-            )
-
-            # Flatten and map results by row_idx
             for batch_result in batch_results:
                 for result in batch_result:
                     row_idx = result[0]
                     processed_results[row_idx] = result
 
-        # Combine results in original order
+        # Combine results in original order, validating successful ones
         ordered_results = []
         chunk_molecules = []
         chunk_mappings = []
 
+        smiles_params = Chem.SmilesParserParams()
+        smiles_params.removeHs = False
+
         for row_idx, _ in chunk_data:
             if row_idx in empty_indices:
-                # Empty result for failed/missing conformers
                 result = (row_idx, {}, _empty_stats(), False, "")
             else:
                 result = processed_results.get(
@@ -396,29 +434,56 @@ class CalculateTorsions(BaseActor):
                     (row_idx, {}, _empty_stats(), False, "")
                 )
 
+            # Validate and pickle successful results
+            if result[3]:  # success flag from worker
+                _, mapping, stats, _, smiles = result
+                mol_obj = Chem.MolFromSmiles(smiles, smiles_params)
+
+                if mol_obj is None:
+                    stats = dict(stats)
+                    stats['warnings'] = stats.get('warnings', []) + [
+                        'SMILES reconstruction: MolFromSmiles returned None'
+                    ]
+                    result = (row_idx, {}, stats, False, "")
+                else:
+                    try:
+                        bond_map = CanonicalBondProperties.canonical_to_bond_idx(
+                            mol_obj, mapping
+                        )
+                        chunk_molecules.append(mol_obj)
+                        chunk_mappings.append(bond_map)
+                    except (ValueError, KeyError) as e:
+                        stats = dict(stats)
+                        stats['warnings'] = stats.get('warnings', []) + [
+                            f"Bond canonicalization: {e}"
+                        ]
+                        result = (row_idx, {}, stats, False, "")
+
             ordered_results.append(result)
-
-            # Collect successful results for pickle
-            if result[3]:  # success flag
-                _, mapping, _, _, smiles = result
-                # Parse SMILES to mol for pickle
-                params = Chem.SmilesParserParams()
-                params.removeHs = False
-                mol_obj = Chem.MolFromSmiles(smiles, params)
-                if mol_obj is not None:
-
-                    # Convert canonical mapping back to bond indices for storage
-                    bond_map = CanonicalBondProperties.canonical_to_bond_idx(
-                        mol_obj, mapping
-                    )
-                    chunk_molecules.append(mol_obj)
-                    chunk_mappings.append(bond_map)
 
         # Save chunk to pickle
         if chunk_molecules:
             self._save_chunk(chunk_molecules, chunk_mappings, chunk_idx)
 
         return ordered_results
+
+    @staticmethod
+    def _serialize_mapping(mapping: Dict) -> str:
+        """
+        Serialize canonical mapping to JSON for CSV-safe storage.
+
+        Args:
+            mapping: {(canonical_rank1, canonical_rank2): circular_variance}
+
+        Returns:
+            JSON string with keys 'canonical_atom_ranks' and 'circular_variance'
+        """
+        if not mapping:
+            return '{}'
+        return json.dumps({
+            'canonical_atom_ranks': [list(k) for k in mapping.keys()],
+            'circular_variance': list(mapping.values()),
+        })
 
     def _append_results(
         self,
@@ -434,7 +499,7 @@ class CalculateTorsions(BaseActor):
         """
         for _, mapping, stats, success, smiles in chunk_results:
             results['torsion_smiles'].append(smiles)
-            results['torsion_mapping'].append(mapping.__repr__())
+            results['torsion_mapping'].append(self._serialize_mapping(mapping))
             results['torsion_success'].append(success)
             results['n_confs'].append(stats['n_confs'])
             results['low_confs'].append(stats['low_confs'])
