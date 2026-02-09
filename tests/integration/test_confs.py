@@ -186,16 +186,18 @@ class TestRDKitBackend:
 
     def test_rdkit_pickle_file_integrity(self, conformer_test_data, logger, pipeline_context):
         """
-        Verify RDKit pickle file integrity and consistency with DataFrame results.
+        Verify RDKit chunked pickle output integrity and consistency with DataFrame results.
 
         Tests:
-        1. Pickle file exists at expected path
-        2. File contains (binary, name) tuples in correct format
-        3. Pickle molecule names match conformer_success=True rows in DataFrame
-        4. Molecules can be reconstructed from pickle with accessible conformers
-        5. Invalid SMILES are properly excluded from pickle file
+        1. Conformers directory and chunk files exist
+        2. Manifest matches chunk files on disk
+        3. Chunk files contain (binary, name) tuples in correct format
+        4. Pickle molecule names match conformer_success=True rows in DataFrame
+        5. Molecules can be reconstructed from pickle with accessible conformers
+        6. Invalid SMILES are properly excluded from pickle files
         """
         import pickle
+        import json
         from pathlib import Path
 
         params = GenerateConfsParams(
@@ -211,39 +213,57 @@ class TestRDKitBackend:
 
         output = actor(actor_input)
 
-        # 1. Verify pickle file exists at expected path
-        expected_pickle_path = Path(pipeline_context.output_dir) / "RDKit_conformers.pkl"
-        assert expected_pickle_path.exists(), "Pickle file should exist"
+        # 1. Verify conformers directory and chunk files exist
+        confs_dir = Path(pipeline_context.output_dir) / "conformers"
+        assert confs_dir.exists(), "Conformers directory should exist"
 
-        # 2. Read pickle file directly and verify format
-        with open(expected_pickle_path, 'rb') as f:
-            mol_data = pickle.load(f)
+        chunk_files = sorted(confs_dir.glob("chunk_*.pkl"))
+        assert len(chunk_files) > 0, "Should have at least one chunk file"
 
-        # Verify it's a list of tuples
-        assert isinstance(mol_data, list), "Pickle should contain a list"
-        assert all(isinstance(item, tuple) and len(item) == 2 for item in mol_data), \
-            "Each item should be a (binary, name) tuple"
+        manifest_path = confs_dir / "manifest.json"
+        assert manifest_path.exists(), "Manifest file should exist"
 
-        # 3. Extract successful names from DataFrame and compare with pickle
+        # 2. Verify manifest matches chunk files
+        with open(manifest_path, 'r') as f:
+            manifest = json.load(f)
+
+        assert len(manifest) == len(chunk_files), "Manifest entries should match chunk file count"
+
+        # 3. Read all chunks and verify format
+        all_mol_data = []
+        for entry in manifest:
+            chunk_path = confs_dir / entry['file']
+            assert chunk_path.exists(), f"Chunk file {entry['file']} should exist"
+
+            with open(chunk_path, 'rb') as f:
+                mol_data = pickle.load(f)
+
+            assert isinstance(mol_data, list), "Chunk should contain a list"
+            assert len(mol_data) == entry['count'], "Chunk size should match manifest count"
+            assert all(isinstance(item, tuple) and len(item) == 2 for item in mol_data), \
+                "Each item should be a (binary, name) tuple"
+
+            all_mol_data.extend(mol_data)
+
+        # 4. Extract successful names from DataFrame and compare with pickle
         successful_df_names = output.data[output.data['conformer_success']]['molecule_id'].tolist()
-        pickle_names = [name for _, name in mol_data]
+        pickle_names = [name for _, name in all_mol_data]
 
         assert set(pickle_names) == set(successful_df_names), \
             "Pickle file names should match conformer_success=True names in DataFrame"
 
-        # 4. Verify invalid SMILES is excluded
+        # 5. Verify invalid SMILES is excluded
         assert 'invalid' not in pickle_names, "Invalid SMILES should not be in pickle file"
         assert 'invalid' in output.data['molecule_id'].tolist(), "Invalid SMILES should be in DataFrame"
         invalid_row = output.data[output.data['molecule_id'] == 'invalid']
         assert not invalid_row['conformer_success'].iloc[0], "Invalid SMILES should have conformer_success=False"
 
-        # 5. Reconstruct molecules from binary and verify conformers
-        for mol_binary, name in mol_data:
+        # 6. Reconstruct molecules from binary and verify conformers
+        for mol_binary, name in all_mol_data:
             mol = Chem.Mol(mol_binary)
             assert mol is not None, f"Should be able to reconstruct molecule {name}"
             assert mol.GetNumConformers() > 0, f"Molecule {name} should have conformers"
 
-            # Verify name is preserved
             if mol.HasProp('_Name'):
                 assert mol.GetProp('_Name') == name
 
@@ -296,6 +316,7 @@ class TestOpenEyeBackend:
             max_confs=20,
             SMILES_column='smiles',
             names_column='molecule_id',
+            convert_to_rdkit=True,  # Also test conversion to RDKit molecules
             dropna=True
         )
 
