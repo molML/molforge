@@ -17,7 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from .base import ConformerBackend
-from ...utils.constants import OUTPUT_CHUNK_SIZE
+from ...utils.constants import OUTPUT_CHUNK_SIZE, DEFAULT_N_JOBS
 
 
 def _generate_single_conformer(
@@ -199,10 +199,9 @@ class RDKitBackend(ConformerBackend):
         self._confs_dir = self._setup_confs_dir()
 
         n_mols = len(smiles_list)
-        n_workers = max(1, __import__('multiprocessing').cpu_count() - 1)
 
         self.log(
-            f"Generating conformers for {n_mols:,} molecules with {n_workers} workers."
+            f"Generating conformers for {n_mols:,} molecules with {DEFAULT_N_JOBS} workers."
         )
 
         # Submit one molecule per future for dynamic load balancing
@@ -210,7 +209,7 @@ class RDKitBackend(ConformerBackend):
         start_time = time.time()
         completed = 0
 
-        with ProcessPoolExecutor(max_workers=n_workers) as executor:
+        with ProcessPoolExecutor(max_workers=DEFAULT_N_JOBS) as executor:
             future_to_name = {
                 executor.submit(
                     _generate_single_conformer,
