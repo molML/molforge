@@ -2,12 +2,14 @@
 RDKit ETKDG conformer generation backend.
 
 Uses RDKit's ETKDG (Experimental Torsion Knowledge Distance Geometry) method
-for conformer generation. Stores molecules in memory for efficient processing.
+for conformer generation. Writes output in chunks for memory-efficient streaming.
 """
 
-from typing import Dict, Any, Iterator, Tuple
+from typing import Dict, Any, Iterator, List, Tuple
 import time
 import pickle
+import json
+import gc
 import pandas as pd
 from pathlib import Path
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -15,45 +17,7 @@ from rdkit import Chem
 from rdkit.Chem import AllChem
 
 from .base import ConformerBackend
-from ...utils.actortools.multiprocess import calculate_chunk_params
-
-
-def _generate_conformer_chunk(
-    chunk: list[Tuple[str, str]],
-    max_confs: int,
-    random_seed: int,
-    rms_threshold: float,
-    use_random_coords: bool,
-    use_uff: bool,
-    max_iterations: int
-) -> list[Tuple[str, Dict[str, Any]]]:
-    """
-    Generate conformers for a chunk of SMILES.
-
-    Module-level function for efficient parallel processing with chunking.
-    Processes multiple molecules in a single worker to reduce overhead.
-
-    Args:
-        chunk: List of (smiles, name) tuples
-        max_confs: Maximum number of conformers to generate
-        random_seed: Random seed for reproducibility
-        rms_threshold: RMS threshold for conformer pruning
-        use_random_coords: Whether to use random coordinates
-        use_uff: Whether to use UFF optimization
-        max_iterations: Maximum iterations for UFF optimization
-
-    Returns:
-        List of (name, result_dict) tuples for each molecule in chunk
-    """
-    results = []
-    for smiles, name in chunk:
-        result = _generate_single_conformer(
-            smiles, name,
-            max_confs, random_seed, rms_threshold,
-            use_random_coords, use_uff, max_iterations
-        )
-        results.append(result)
-    return results
+from ...utils.constants import OUTPUT_CHUNK_SIZE, DEFAULT_N_JOBS
 
 
 def _generate_single_conformer(
@@ -173,8 +137,8 @@ class RDKitBackend(ConformerBackend):
     RDKit ETKDG conformer generation backend.
 
     Features:
-    - In-memory storage (no file I/O)
-    - ETKDG conformer generation
+    - Chunked output for memory-efficient streaming
+    - ETKDG conformer generation with parallel processing
     - Optional UFF optimization
     - Configurable pruning threshold
     """
@@ -193,9 +157,7 @@ class RDKitBackend(ConformerBackend):
         """Initialize RDKit backend."""
         super().__init__(params, logger, context)
 
-        # Storage for generated conformers (in input order)
-        self._molecules: list[Chem.Mol] = []
-        self._output_file: str = None  # Path to pickle file
+        self._confs_dir: str = None
 
         self.log(
             f"RDKit ETKDG initialized: max_confs={params.max_confs}, "
@@ -205,13 +167,27 @@ class RDKitBackend(ConformerBackend):
     @property
     def _report_file(self) -> str:
         """Path to report CSV file."""
+        if self._confs_dir:
+            return str(Path(self._confs_dir) / "RDKit_rpt.csv")
         if self.context and hasattr(self.context, 'output_dir'):
-            return str(Path(self.context.output_dir) / "RDKit_rpt.csv")
+            return str(Path(self.context.output_dir) / "conformers" / "RDKit_rpt.csv")
         return "RDKit_rpt.csv"
+
+    def _setup_confs_dir(self) -> str:
+        """Create and return the conformers output directory."""
+        if self.context and hasattr(self.context, 'output_dir'):
+            confs_dir = Path(self.context.output_dir) / "conformers"
+        else:
+            confs_dir = Path("conformers")
+
+        confs_dir.mkdir(parents=True, exist_ok=True)
+        return str(confs_dir)
 
     def generate_conformers(self, smiles_list: list[str], names_list: list[str]) -> Dict[str, Dict[str, Any]]:
         """
         Generate conformers using RDKit ETKDG with parallel processing and progress reporting.
+
+        Writes successful molecules to chunked pickle files in input order.
 
         Args:
             smiles_list: List of SMILES strings
@@ -220,78 +196,65 @@ class RDKitBackend(ConformerBackend):
         Returns:
             Dict mapping names to generation results
         """
-        # Clear previous results
-        self._molecules.clear()
+        self._confs_dir = self._setup_confs_dir()
 
-        # Prepare chunks (use smaller chunk size for conformer generation)
-        max_chunk_size = 50  # Smaller chunks enable frequent progress updates
-        n_processes, chunk_size, _ = calculate_chunk_params(len(smiles_list), max_chunk_size)
-
-        # Create chunks of (smiles, name) pairs
-        pairs = list(zip(smiles_list, names_list))
-        chunks = [pairs[i:i + chunk_size] for i in range(0, len(pairs), chunk_size)]
-        n_chunks = len(chunks)
+        n_mols = len(smiles_list)
 
         self.log(
-            f"Generating conformers for {len(smiles_list):,} molecules with {n_processes} processes "
-            f"({n_chunks} chunks of {chunk_size})."
+            f"Generating conformers for {n_mols:,} molecules with {DEFAULT_N_JOBS} workers."
         )
 
-        # Process chunks in parallel
+        # Submit one molecule per future for dynamic load balancing
         results_dict = {}
-        chunk_results = [None] * n_chunks
         start_time = time.time()
-        completed_chunks = 0
+        completed = 0
 
-        with ProcessPoolExecutor(max_workers=n_processes) as executor:
-            # Submit all chunk tasks
-            future_to_chunk = {
+        with ProcessPoolExecutor(max_workers=DEFAULT_N_JOBS) as executor:
+            future_to_name = {
                 executor.submit(
-                    _generate_conformer_chunk,
-                    chunk,
+                    _generate_single_conformer,
+                    smiles, name,
                     self.params.max_confs,
                     self.params.random_seed,
                     self.params.rms_threshold,
                     self.params.use_random_coords,
                     self.params.use_uff,
                     self.params.max_iterations
-                ): i
-                for i, chunk in enumerate(chunks)
+                ): name
+                for smiles, name in zip(smiles_list, names_list)
             }
 
-            # Process as completed with progress reporting
-            for future in as_completed(future_to_chunk, timeout=self.params.timeout):
-                chunk_idx = future_to_chunk[future]
+            for future in as_completed(future_to_name, timeout=self.params.timeout):
+                name = future_to_name[future]
                 try:
-                    chunk_results[chunk_idx] = future.result(timeout=self.params.timeout)
-                    completed_chunks += 1
-
-                    # Report progress after each chunk
-                    self._report_progress(completed_chunks, n_chunks, start_time, chunk_size)
-
+                    result_name, result = future.result(timeout=self.params.timeout)
+                    results_dict[result_name] = result
                 except Exception as e:
-                    self.log(f"Chunk {chunk_idx} failed: {e}", level='ERROR')
-                    # Fill with failures for this chunk
-                    chunk_results[chunk_idx] = [
-                        (name, {
-                            'success': False,
-                            'n_conformers': 0,
-                            'status': f'Chunk processing error: {str(e)}',
-                            'rotors': 0,
-                            'elapsed_time': 0.0
-                        })
-                        for _, name in chunks[chunk_idx]
-                    ]
-                    completed_chunks += 1
+                    self.log(f"Molecule '{name}' failed: {e}", level='ERROR')
+                    results_dict[name] = {
+                        'success': False,
+                        'n_conformers': 0,
+                        'status': f'Worker error: {str(e)}',
+                        'rotors': 0,
+                        'elapsed_time': 0.0
+                    }
 
-        # Flatten results into dict
-        for chunk_result in chunk_results:
-            if chunk_result:
-                for name, result in chunk_result:
-                    results_dict[name] = result
+                completed += 1
+                if completed % max(1, n_mols // 10) == 0 or completed == n_mols:
+                    elapsed = time.time() - start_time
+                    rate = completed / elapsed if elapsed > 0 else 0
+                    eta = (n_mols - completed) / rate if rate > 0 else 0
+                    self.log(
+                        f"Progress: {completed:,}/{n_mols:,} ({100 * completed / n_mols:.0f}%) | "
+                        f"{elapsed:.1f}s elapsed | ETA: {eta:.0f}s | {rate:.1f} mol/s"
+                    )
 
-        # Store molecules and build report in input order
+        # Write molecules and report in input order
         report_data = []
+        mol_buffer = []
+        manifest = []
+        output_chunk_idx = 0
+
         for smiles, name in zip(smiles_list, names_list):
             result = results_dict[name]
 
@@ -305,84 +268,78 @@ class RDKitBackend(ConformerBackend):
                 'Status': result['status']
             })
 
-            # Store successful molecules
+            # Buffer successful molecules for chunked output
             if result['success'] and 'molecule' in result:
                 mol = result['molecule']
-                # Ensure name property is set (may be lost during pickling/unpickling)
                 if not mol.HasProp('_Name'):
                     mol.SetProp('_Name', name)
-                self._molecules.append(mol)
+                mol_buffer.append(mol)
 
-        success_count = sum(1 for r in results_dict.values() if r['success'])
-        self.log(f"RDKit generation complete: {success_count}/{len(smiles_list)} succeeded")
+                # Flush when buffer reaches output chunk size
+                if len(mol_buffer) >= OUTPUT_CHUNK_SIZE:
+                    chunk_entry = self._write_chunk(mol_buffer, output_chunk_idx)
+                    manifest.append(chunk_entry)
+                    mol_buffer = []
+                    output_chunk_idx += 1
+                    gc.collect()
 
-        # Write molecules to pickle file
-        self._output_file = self._write_pickle_file()
+        # Flush remaining molecules
+        if mol_buffer:
+            chunk_entry = self._write_chunk(mol_buffer, output_chunk_idx)
+            manifest.append(chunk_entry)
 
-        # Write report to CSV file
+        # Write manifest and report
+        self._write_manifest(manifest)
         self._write_report_file(report_data)
 
-        # Clear molecules from memory to free RAM
-        self._molecules.clear()
+        success_count = sum(1 for r in results_dict.values() if r['success'])
+        total_mols = sum(entry['count'] for entry in manifest)
+        total_time = time.time() - start_time
+        rate = len(smiles_list) / total_time if total_time > 0 else 0
+        self.log(
+            f"RDKit generation complete: {success_count}/{len(smiles_list)} succeeded, "
+            f"wrote {total_mols:,} molecules in {len(manifest)} chunk(s) "
+            f"({total_time:.1f}s, {rate:.1f} mol/s)"
+        )
 
         return results_dict
 
-    def _report_progress(self, completed_chunks: int, total_chunks: int,
-                         start_time: float, chunk_size: int):
+    def _write_chunk(self, molecules: List[Chem.Mol], chunk_idx: int) -> Dict[str, Any]:
         """
-        Report conformer generation progress.
+        Write a chunk of molecules to pickle file.
 
         Args:
-            completed_chunks: Number of chunks completed
-            total_chunks: Total number of chunks
-            start_time: Start time of generation
-            chunk_size: Approximate molecules per chunk
-        """
-        elapsed = time.time() - start_time
-        progress_pct = 100 * completed_chunks / total_chunks
-        molecules_processed = completed_chunks * chunk_size
-
-        if completed_chunks > 0:
-            estimated_total = elapsed * total_chunks / completed_chunks
-            eta = estimated_total - elapsed
-            rate = molecules_processed / elapsed
-
-            self.log(
-                f"Progress: {completed_chunks}/{total_chunks} chunks "
-                f"({progress_pct:.1f}%) | "
-                f"Elapsed: {elapsed:.1f}s | "
-                f"ETA: {eta:.1f}s | "
-                f"Rate: {rate:.0f} mol/s"
-            )
-
-    def _write_pickle_file(self) -> str:
-        """
-        Write molecules to pickle file using RDKit binary format.
+            molecules: List of RDKit molecules with conformers
+            chunk_idx: Chunk index for filename
 
         Returns:
-            Path to pickle file
+            Manifest entry dict with file, names, and count
         """
-        # Determine output path (follow OpenEye pattern)
-        if self.context and hasattr(self.context, 'output_dir'):
-            output_path = Path(self.context.output_dir) / "RDKit_conformers.pkl"
-        else:
-            output_path = Path("RDKit_conformers.pkl")
+        filename = f"chunk_{chunk_idx:04d}.pkl"
+        chunk_path = Path(self._confs_dir) / filename
 
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Store molecules as (binary, name) tuples to preserve names reliably
         mol_data = []
-        for mol in self._molecules:
-            mol_binary = mol.ToBinary()
+        names = []
+        for mol in molecules:
             name = mol.GetProp('_Name') if mol.HasProp('_Name') else ''
-            mol_data.append((mol_binary, name))
+            mol_data.append((mol.ToBinary(), name))
+            names.append(name)
 
-        # Write molecule data to pickle
-        with open(output_path, 'wb') as f:
+        with open(chunk_path, 'wb') as f:
             pickle.dump(mol_data, f)
 
-        self.log(f"Wrote {len(self._molecules)} molecules to {output_path}")
-        return str(output_path)
+        return {'file': filename, 'names': names, 'count': len(mol_data)}
+
+    def _write_manifest(self, manifest: List[Dict[str, Any]]) -> None:
+        """
+        Write manifest file for fast name lookup and integrity checking.
+
+        Args:
+            manifest: List of chunk entries with file, names, count
+        """
+        manifest_path = Path(self._confs_dir) / "manifest.json"
+        with open(manifest_path, 'w') as f:
+            json.dump(manifest, f, indent=2)
 
     def _write_report_file(self, report_data: list[Dict[str, Any]]) -> None:
         """
@@ -391,60 +348,62 @@ class RDKitBackend(ConformerBackend):
         Args:
             report_data: List of report entries (dicts)
         """
-        # Create DataFrame from report data
         report_df = pd.DataFrame(report_data)
-
-        # Write to CSV file
         Path(self._report_file).parent.mkdir(parents=True, exist_ok=True)
         report_df.to_csv(self._report_file, index=False)
-
         self.log(f"Wrote report to {self._report_file}")
 
     def get_endpoint(self) -> str:
         """
-        Return path to pickle file (homogeneous with OpenEye backend).
+        Return path to conformers directory.
 
         Returns:
-            Path to pickle file containing RDKit molecules
+            Path to directory containing chunked conformer output
         """
-        if self._output_file is None:
+        if self._confs_dir is None:
             raise RuntimeError("No conformers generated yet. Call generate_conformers() first.")
-        return self._output_file
+        return self._confs_dir
 
     def extract_molecules(self) -> Iterator[Chem.Mol]:
         """
-        Extract molecules from pickle file.
+        Stream molecules from chunked pickle files.
+
+        Loads one chunk at a time to avoid loading all molecules into memory.
 
         Yields:
-            RDKit molecules with conformers
+            RDKit molecules with conformers, in input order
         """
-        if self._output_file is None:
+        if self._confs_dir is None:
             self.log("No conformers generated yet. Call generate_conformers() first.", level='ERROR')
             return
 
-        # Check file exists
-        if not Path(self._output_file).exists():
-            self.log("Output file not found", level='ERROR')
+        confs_dir = Path(self._confs_dir)
+        chunk_files = sorted(confs_dir.glob("chunk_*.pkl"))
+
+        if not chunk_files:
+            self.log("No chunk files found", level='ERROR')
             return
 
-        # Read molecule data (binary, name) tuples from pickle file
-        try:
-            with open(self._output_file, 'rb') as f:
-                mol_data = pickle.load(f)
-        except Exception as e:
-            self.log(f"Failed to read output file: {e}", level='ERROR')
-            return
-
-        # Convert from binary format and restore names
-        for mol_binary, name in mol_data:
+        for chunk_path in chunk_files:
             try:
-                mol = Chem.Mol(mol_binary)
-                if name and not mol.HasProp('_Name'):
-                    mol.SetProp('_Name', name)
-                yield mol
+                with open(chunk_path, 'rb') as f:
+                    mol_data = pickle.load(f)
             except Exception as e:
-                self.log(f"Failed to load molecule from binary ({name}): {e}", level='WARNING')
+                self.log(f"Failed to read {chunk_path.name}: {e}", level='ERROR')
                 continue
+
+            for mol_binary, name in mol_data:
+                try:
+                    mol = Chem.Mol(mol_binary)
+                    if name and not mol.HasProp('_Name'):
+                        mol.SetProp('_Name', name)
+                    yield mol
+                except Exception as e:
+                    self.log(f"Failed to load molecule from binary ({name}): {e}", level='WARNING')
+                    continue
+
+            del mol_data
+            gc.collect()
 
     def get_report_dataframe(self) -> pd.DataFrame:
         """Get conformer generation report as DataFrame (matches OMEGA format)."""
@@ -459,29 +418,39 @@ class RDKitBackend(ConformerBackend):
             return pd.DataFrame(columns=['Molecule', 'Title', 'Rotors', 'Conformers', 'ElapsedTime(s)', 'Status'])
 
     def get_successful_names(self) -> list[str]:
-        """Get list of successfully generated molecule names from pickle file."""
-        if self._output_file is None:
-            self.log("Cannot extract names from file: no output file generated yet", level='WARNING')
+        """
+        Get list of successfully generated molecule names from manifest.
+
+        Reads the lightweight manifest file and verifies each chunk file
+        exists and is non-empty, without deserializing molecule data.
+
+        Returns:
+            List of molecule names that have conformers on disk
+        """
+        if self._confs_dir is None:
+            self.log("Cannot extract names: no output generated yet", level='WARNING')
             return []
 
-        if not Path(self._output_file).exists():
-            self.log("Cannot extract names from file: output file does not exist", level='WARNING')
+        manifest_path = Path(self._confs_dir) / "manifest.json"
+        if not manifest_path.exists():
+            self.log("Cannot extract names: manifest not found", level='WARNING')
             return []
 
-        if Path(self._output_file).stat().st_size == 0:
-            self.log("Cannot extract names from file: output file is empty", level='WARNING')
-            return []
-
-        # Read molecule names from pickle file
         try:
-            with open(self._output_file, 'rb') as f:
-                mol_data = pickle.load(f)
-
-            # Extract names from (binary, name) tuples
-            names = [name for _, name in mol_data]
-            return names
-
+            with open(manifest_path, 'r') as f:
+                manifest = json.load(f)
         except Exception as e:
-            self.log(f"Cannot extract names from file: failed to read output file: {e}", level='ERROR')
+            self.log(f"Cannot extract names: failed to read manifest: {e}", level='ERROR')
             return []
 
+        names = []
+        for entry in manifest:
+            chunk_path = Path(self._confs_dir) / entry['file']
+
+            if not chunk_path.exists() or chunk_path.stat().st_size == 0:
+                self.log(f"Chunk file missing or empty: {entry['file']}", level='WARNING')
+                continue
+
+            names.extend(entry['names'])
+
+        return names

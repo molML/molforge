@@ -20,7 +20,7 @@ except ImportError:
     oechem = None
 
 # Export for centralized import management
-__all__ = ['HAS_OPENEYE', 'oechem', 'DEFAULT_N_JOBS', 'DEFAULT_MP_THRESHOLD', 'MAX_CHUNK_SIZE', 'DEFAULT_LOG_LEVEL']
+__all__ = ['HAS_OPENEYE', 'oechem', 'DEFAULT_N_JOBS', 'DEFAULT_MP_THRESHOLD', 'MAX_CHUNK_SIZE', 'OUTPUT_CHUNK_SIZE', 'DEFAULT_LOG_LEVEL']
 
 # =============================================================================
 # Multiprocessing Configuration
@@ -39,6 +39,11 @@ DEFAULT_MP_THRESHOLD = 1_000
 # Large chunks can cause excessive pickling/serialization overhead
 # Used by: CurateMol, CurateDistribution
 MAX_CHUNK_SIZE = 50_000
+
+# Output chunk size for writing large result files
+# Controls granularity of chunked pickle output (rdkit mols with conformers)
+# For most datasets (< 50k molecules), this produces a single output file
+OUTPUT_CHUNK_SIZE = 50_000
 
 # =============================================================================
 # Logging Configuration
