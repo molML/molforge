@@ -472,7 +472,7 @@ class ChEMBLCurator(BaseActor):
             grouped.sort_values(ascending=False).head(self.top_n),
             columns=['entries']
         ).reset_index()
-        
+
         # Calculate percentages
         top['%'] = (round(top['entries'] / len(df), 2) * 100).astype(int)
         top['entries'] = top['entries'].astype(str) + f"/{len(df)}"
@@ -480,7 +480,12 @@ class ChEMBLCurator(BaseActor):
         # Check if configuration is optimal
         if not top.empty:
             self._check_configuration_optimality(top, label, df)
-        
+
+        # Translate BAO codes to readable labels (after optimality check to not affect config slicing)
+        bao_to_label = {v: k for k, v in self._params._BAO_FORMAT_MAP.items()}
+        top.insert(top.columns.get_loc('bao_format') + 1, 'assay_format',
+                   top['bao_format'].map(bao_to_label).fillna('unmapped'))
+
         self.log(f"{label}\n{top.to_markdown()}")
     
     def _check_configuration_optimality(self, top: pd.DataFrame, label: str, df: pd.DataFrame) -> None:
@@ -496,12 +501,24 @@ class ChEMBLCurator(BaseActor):
                 f'{label} | Configured curation is not optimal.',
                 level='WARNING'
             )
-            max_key_length = max(len(k) for k in current_config.keys())
-            max_c_v_length = max(len(repr(v)) for v in current_config.values())
-            
+            bao_to_label = {v: k for k, v in self._params._BAO_FORMAT_MAP.items()}
+
+            lines = []
+            for (c_k, c_v), (_, t_v) in zip(current_config.items(), top_config.items()):
+                if c_v == t_v:
+                    continue
+                if c_k == 'bao_format':
+                    c_label = bao_to_label.get(c_v, 'unmapped')
+                    t_label = bao_to_label.get(t_v, 'unmapped')
+                    lines.append(('assay_format', f"{c_label} ({c_v})", f"{t_label} ({t_v})"))
+                else:
+                    lines.append((c_k, repr(c_v), repr(t_v)))
+
+            max_key = max(len(k) for k, _, _ in lines)
+            max_cv = max(len(cv) for _, cv, _ in lines)
+
             recommended_str = '\n'.join(
-                f"  {c_k:{max_key_length+1}}:\t{repr(c_v):>{max_c_v_length}} -> {repr(t_v)}" 
-                for (c_k, c_v), (t_k, t_v) in zip(current_config.items(), top_config.items()) if c_v != t_v
+                f"  {k:{max_key}}:\t{cv:>{max_cv}} -> {tv}" for k, cv, tv in lines
             )
             
             self.log(
