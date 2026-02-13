@@ -79,33 +79,31 @@ class OpenEyeBackend(ConformerBackend):
             )
 
     @property
+    def _confs_dir(self) -> Path:
+        """Conformers output directory."""
+        if self.context and hasattr(self.context, 'output_dir'):
+            return Path(self.context.output_dir) / "conformers"
+        return Path("conformers")
+
+    @property
     def _input_file(self) -> str:
         """Path to input SMILES file."""
-        if self.context and hasattr(self.context, 'output_dir'):
-            return str(Path(self.context.output_dir) / "OEOMEGA_smiles.smi")
-        return "OEOMEGA_smiles.smi"
+        return str(self._confs_dir / "OEOMEGA_smiles.smi")
 
     @property
     def _output_file(self) -> str:
         """Path to output conformers file."""
-        if self.context and hasattr(self.context, 'output_dir'):
-            return str(Path(self.context.output_dir) / "OEOMEGA_conformers.oeb")
-        return "OEOMEGA_conformers.oeb"
+        return str(self._confs_dir / "OEOMEGA_conformers.oeb")
 
     @property
     def _report_file(self) -> str:
         """Path to OMEGA report file."""
-        if self.context and hasattr(self.context, 'output_dir'):
-            return str(Path(self.context.output_dir) / "OEOMEGA_rpt.csv")
-        return "OEOMEGA_rpt.csv"
+        return str(self._confs_dir / "OEOMEGA_rpt.csv")
 
     @property
     def _path_prefix(self) -> str:
         """Path prefix for OMEGA command (without file extension)."""
-        if self.context and hasattr(self.context, 'output_dir'):
-            base = str(Path(self.context.output_dir) / "OEOMEGA")
-            return base.replace(".OEOMEGA", "")
-        return "OEOMEGA"
+        return str(self._confs_dir / "OEOMEGA")
 
     def generate_conformers(self, smiles_list: list[str], names_list: list[str]) -> Dict[str, Dict[str, Any]]:
         """
