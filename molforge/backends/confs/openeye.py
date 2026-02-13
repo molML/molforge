@@ -7,6 +7,7 @@ File-based workflow: SMILES → .smi → OMEGA → .oeb
 
 from typing import Dict, Any, Iterator
 from pathlib import Path
+import os
 import subprocess
 import threading
 import time
@@ -127,6 +128,9 @@ class OpenEyeBackend(ConformerBackend):
         # Run OMEGA executable with progress monitoring
         self._execute_omega()
 
+        # Reorder output to match input order (OMEGA may process asynchronously)
+        self._sort_output()
+
         self._generated = True
 
         # Get successful names and report
@@ -154,6 +158,61 @@ class OpenEyeBackend(ConformerBackend):
             for smiles, name in zip(smiles_list, names_list):
                 if smiles and name:  # Basic validation
                     f.write(f"{smiles} {name}\n")
+
+    def _sort_output(self):
+        """
+        Reorder OEB output file to match the input SMILES order.
+
+        OMEGA may process molecules out of order (e.g. with MPI parallelism),
+        so the output OEB is not guaranteed to match the input ordering.
+        This method reorders the OEB so that molecules appear in the same
+        order as the input SMILES file, which downstream actors rely on.
+
+        Uses OEMolDatabase.Order() + Save() to reorder in-place, preserving
+        OMEGA's compact internal encoding (no re-serialization overhead).
+        """
+        if not Path(self._output_file).exists():
+            return
+
+        db = oechem.OEMolDatabase(self._output_file)
+        n_mols = db.NumMols()
+        if n_mols == 0:
+            return
+
+        # Build name → database index mapping from OEB (title-only, fast)
+        name_to_db_idx = {}
+        for i in range(n_mols):
+            name_to_db_idx[db.GetTitle(i)] = i
+
+        # Read input order from SMILES file
+        input_names = []
+        with open(self._input_file) as f:
+            for line in f:
+                parts = line.strip().split()
+                if len(parts) >= 2:
+                    input_names.append(parts[-1])
+
+        # Build reordered index vector (input order → db indices)
+        indices = oechem.OEUIntVector()
+        for name in input_names:
+            if name in name_to_db_idx:
+                indices.append(name_to_db_idx[name])
+
+        # Check if already in order
+        already_sorted = all(
+            indices[i] == i for i in range(len(indices))
+        ) if len(indices) == n_mols else False
+
+        if already_sorted:
+            self.log("OEB output already in input order, skipping sort")
+            return
+
+        # Reorder database and save to temp file, then replace original
+        db.Order(indices)
+        sorted_path = str(Path(self._output_file).parent / '_sorted_temp.oeb')
+        db.Save(sorted_path)
+        os.replace(sorted_path, self._output_file)
+        self.log(f"Sorted OEB to input order ({len(indices)} molecules)")
 
     def get_successful_names(self) -> list[str]:
         """Read names of successfully generated molecules from output file (matches original)."""
