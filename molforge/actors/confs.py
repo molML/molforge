@@ -73,6 +73,11 @@ class GenerateConfs(BaseActor):
         return [self.SMILES_column]
 
     @property
+    def title_column(self) -> str:
+        """Column name for molecule identifiers used during conformer generation."""
+        return 'Title'
+    
+    @property
     def output_columns(self) -> list[str]:
         """
         Columns added to output DataFrame.
@@ -88,7 +93,7 @@ class GenerateConfs(BaseActor):
         Actor-added columns:
             - conformer_success: Boolean flag indicating successful generation
         """
-        return ['Molecule', 'Title', 'Rotors', 'n_conformers', 'ElapsedTime(s)', 'Status', 'conformer_success']
+        return ['Molecule', self.title_column, 'Rotors', 'n_conformers', 'ElapsedTime(s)', 'Status', 'conformer_success']
 
     def process(self, data: pd.DataFrame) -> pd.DataFrame:
         """
@@ -103,10 +108,9 @@ class GenerateConfs(BaseActor):
         df = data.copy()
 
         # Title column is the name used during conformer generation (matches OMEGA format)
-        title_col = self.output_columns[1]
-        if title_col in df.columns:
+        if self.title_column in df.columns:
             raise ValueError(
-                f"DataFrame contains '{title_col}' column which will conflict with conformer report. "
+                f"DataFrame contains '{self.title_column}' column which will conflict with conformer report. "
                 f"Please rename this column before conformer generation."
             )
 
@@ -119,14 +123,13 @@ class GenerateConfs(BaseActor):
                 f"Using enumeration for naming.",
                 level='WARNING'
             )
-            df[title_col] = [f'{self.backend.upper()}_{i}' for i in range(len(df))]
+            df[self.title_column] = [f'{self.backend.upper()}_{i}' for i in range(len(df))]
         else:
-            df[title_col] = df[self.names_column]
+            df[self.title_column] = df[self.names_column]
 
         # Extract SMILES and names as lists
         smiles_list = df[self.SMILES_column].tolist()
-        names_list = df[title_col].tolist()
-
+        names_list = df[self.title_column].tolist()
         self.log(f"Generating conformers for {len(df)} SMILES")
 
         # Generate conformers via backend
@@ -140,13 +143,13 @@ class GenerateConfs(BaseActor):
         df = pd.merge(
             df,
             report_df,
-            on=title_col,
+            on=self.title_column,
             how='left',
             suffixes=('', f' ({self.backend.upper()})')
         )
 
         # Mark conformer success based on presence in successful names
-        df['conformer_success'] = df[title_col].isin(success_names)
+        df['conformer_success'] = df[self.title_column].isin(success_names)
 
         # Rename 'Conformers' column to 'n_conformers' for consistency
         if 'Conformers' in df.columns:
@@ -223,3 +226,11 @@ class GenerateConfs(BaseActor):
             ...     print(f"{mol.GetProp('_Name')}: {mol.GetNumConformers()} conformers")
         """
         return self.backend_instance.extract_molecules()
+
+    def get_successful_names(self) -> list[str]:
+        """Get names of molecules with successful conformer generation."""
+        return self.backend_instance.get_successful_names()
+
+    def get_title_column(self) -> str:
+        """Get the title column name used for molecule identifiers."""
+        return self.title_column
