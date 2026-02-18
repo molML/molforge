@@ -76,7 +76,6 @@ class GenerateConfs(BaseActor):
     def title_column(self) -> str:
         """Column name for molecule identifiers used during conformer generation."""
         return 'Title'
-    
     @property
     def output_columns(self) -> list[str]:
         """
