@@ -122,6 +122,9 @@ class OpenEyeBackend(ConformerBackend):
         # Store expected total for progress monitoring
         self._expected_total = len(smiles_list)
 
+        # Create output directory if it doesn't exist
+        self._confs_dir.mkdir(parents=True, exist_ok=True)
+
         # Write SMILES to input file
         self._write_smiles_file(smiles_list, names_list)
 
@@ -152,8 +155,6 @@ class OpenEyeBackend(ConformerBackend):
 
     def _write_smiles_file(self, smiles_list: list[str], names_list: list[str]):
         """Write SMILES to input file."""
-        Path(self._input_file).parent.mkdir(parents=True, exist_ok=True)
-
         with open(self._input_file, 'w') as f:
             for smiles, name in zip(smiles_list, names_list):
                 if smiles and name:  # Basic validation
@@ -177,6 +178,7 @@ class OpenEyeBackend(ConformerBackend):
         db = oechem.OEMolDatabase(self._output_file)
         n_mols = db.NumMols()
         if n_mols == 0:
+            self.log("Unable to sort output file: no molecules found.", level='WARNING')
             return
 
         # Build name → database index mapping from OEB (title-only, fast)
