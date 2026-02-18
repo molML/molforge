@@ -11,7 +11,7 @@ import pandas as pd
 from ..registry import Backend
 
 if TYPE_CHECKING:
-    from ...actors.params.chembl_source import ChEMBLSourceParams
+    from ...actors.params.source import ChEMBLSourceParams
     from ...configuration.context import PipelineContext
 
 
