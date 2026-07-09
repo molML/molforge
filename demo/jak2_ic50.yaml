@@ -1,0 +1,60 @@
+# MolForge demo: JAK2 (CHEMBL2971) IC50 pipeline
+# Full pipeline showcasing curation, tokenization, distribution filtering,
+# OpenEye conformer generation, and the scaffold + split demo plugins.
+version: "1.0"
+
+steps:
+  - source
+  - chembl
+  - curate
+  - tokens
+  - distributions
+  - confs
+  - scaffold
+  - split
+
+source:
+  backend: sql
+  version: 36
+  auto_download: false
+
+chembl:
+  standard_type: IC50
+  standard_units: nM
+  standard_relation: "="
+  assay_type: B
+  target_organism: Homo sapiens
+  assay_format: protein
+  std_threshold: 0.5
+  range_threshold: 0.5
+
+curate:
+  mol_steps: [desalt, removeIsotope, neutralize, sanitize, handleStereo]
+  smiles_steps: [canonical]
+  stereo_policy: assign
+  dropna: true
+
+tokens:
+  dynamically_update_vocab: true
+
+distributions:
+  properties: all
+  global_statistical_threshold: 2.0
+  curate_tokens: true
+  filter_unknown_tokens: true
+  plot_distributions: true
+
+confs:
+  backend: openeye
+  max_confs: 100
+  mode: classic
+
+scaffold:
+  include_generic: true
+
+split:
+  test_ratio: 0.1
+  val_ratio: 0.1
+
+output:
+  dir: demo

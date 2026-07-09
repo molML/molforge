@@ -1,0 +1,44 @@
+# MolForge API Configuration
+# Simple data acquisition pipeline using ChEMBL web API (no database download needed)
+version: "1.0"
+
+# Pipeline steps to execute
+steps:
+  - source
+  - chembl
+  - curate
+
+# ChEMBL data source - API backend (slower, no download required)
+source:
+  backend: api
+  n: 5000
+  search_all: false
+
+# ChEMBL activity curation - Ki binding assays
+chembl:
+  standard_type: Ki
+  standard_units: nM
+  standard_relation: "="
+  assay_type: B
+  target_organism: Homo sapiens
+  assay_format: protein
+  top_n: 5
+  std_threshold: 0.3
+  range_threshold: 0.3
+
+# Molecular structure curation
+curate:
+  SMILES_column: canonical_smiles
+  mol_steps:
+    - desalt
+    - neutralize
+    - sanitize
+  stereo_policy: assign
+  dropna: true
+  check_duplicates: true
+
+# Output settings
+output:
+  dir: ./molforge_output
+  format: csv
+  checkpoints: false

@@ -1,0 +1,45 @@
+# MolForge Basic Configuration - SQL Database
+# Simple data acquisition and curation pipeline using local ChEMBL database
+version: "1.0"
+
+# Pipeline steps to execute
+steps:
+  - source
+  - chembl
+  - curate
+
+# ChEMBL data source - SQL backend (fast, requires database download)
+source:
+  backend: sql
+  n: 1000
+  search_all: true
+  auto_download: true
+  download_dir: ./data/chembl
+  version: latest
+
+# ChEMBL activity curation - IC50 binding assays
+chembl:
+  standard_type: IC50
+  standard_units: nM
+  standard_relation: "="
+  assay_type: B
+  target_organism: Homo sapiens
+  assay_format: protein
+  top_n: 5
+
+# Molecular structure curation
+curate:
+  SMILES_column: canonical_smiles
+  mol_steps:
+    - desalt
+    - neutralize
+    - sanitize
+  stereo_policy: assign
+  dropna: true
+  check_duplicates: true
+
+# Output settings
+output:
+  dir: ./molforge_output
+  format: csv
+  checkpoints: false

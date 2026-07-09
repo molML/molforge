@@ -1,0 +1,115 @@
+# MolForge Full Pipeline Configuration
+# Complete end-to-end pipeline with recommended quality settings
+# Includes: data acquisition, curation, tokenization, distribution filtering, and 3D conformers
+version: "1.0"
+
+# All available pipeline steps
+steps:
+  - source
+  - chembl
+  - curate
+  - tokens
+  - distributions
+  - confs
+
+# ChEMBL data source - SQL backend for optimal performance
+source:
+  backend: sql
+  n: 10000
+  search_all: true
+  auto_download: true
+  download_dir: ./data/chembl
+  version: latest
+
+# ChEMBL activity curation - IC50 binding assays (high quality)
+chembl:
+  standard_type: IC50
+  standard_units: nM
+  standard_relation: "="
+  assay_type: B
+  target_organism: Homo sapiens
+  assay_format: protein
+  top_n: 5
+  std_threshold: 0.5
+  range_threshold: 0.5
+  mistakes_only: true
+  error_margin: 0.0001
+
+# Comprehensive molecular curation with all steps
+curate:
+  SMILES_column: canonical_smiles
+  mol_steps:
+    - desalt
+    - removeIsotope
+    - removeHs
+    - tautomers
+    - neutralize
+    - sanitize
+    - handleStereo
+    - computeProps
+  smiles_steps:
+    - canonical
+    - kekulize
+  neutralize_policy: keep
+  desalt_policy: keep
+  brute_force_desalt: false
+  max_tautomers: 512
+  step_timeout: 60
+  stereo_policy: assign
+  assign_policy: random
+  random_seed: 42
+  try_embedding: false
+  only_unassigned: true
+  only_unique: true
+  max_isomers: 32
+  dropna: true
+  check_duplicates: true
+  duplicates_policy: first
+
+# SMILES tokenization with dynamic vocabulary
+tokens:
+  SMILES_column: curated_smiles
+  vocab_file: null
+  dynamically_update_vocab: true
+
+# Distribution-based filtering with quantile thresholds (removes top/bottom 2.5%)
+distributions:
+  SMILES_column: curated_smiles
+  tokens_column: tokens
+  
+  # Use quantile-based filtering for robustness to outliers
+  global_quantile_threshold: 0.025
+  
+  # Compute all properties
+  properties: all
+  compute_properties: true
+  dropna: true  # set false to keep all molecules and only flag pass/fail
+
+  # Token curation with frequency filtering
+  curate_tokens: true
+  filter_unknown_tokens: true
+  token_frequency_threshold: 0.5
+  
+  # Analysis and visualization
+  plot_distributions: true
+  perform_pca: true
+  
+
+# High-quality 3D conformer generation
+confs:
+  backend: rdkit
+  SMILES_column: curated_smiles
+  names_column: molecule_chembl_id
+  max_confs: 200
+  rms_threshold: 0.5
+  use_random_coords: true
+  random_seed: 42
+  use_uff: true
+  max_iterations: 200
+  dropna: true
+
+# Output settings with checkpointing
+output:
+  dir: ./molforge_full_output
+  format: csv
+  checkpoints: true

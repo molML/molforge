@@ -1,0 +1,79 @@
+# MolForge Distribution Curation Configuration
+# Pipeline focused on statistical filtering of molecular properties and token distributions
+version: "1.0"
+
+steps:
+  - source
+  - chembl
+  - curate
+  - tokens
+  - distributions
+
+# ChEMBL data source - SQL backend for larger datasets
+source:
+  backend: sql
+  n: 5000
+  search_all: true
+  auto_download: true
+  download_dir: ./data/chembl
+  version: latest
+
+# ChEMBL activity curation - EC50 functional assays
+chembl:
+  standard_type: EC50
+  standard_units: nM
+  standard_relation: "="
+  assay_type: F
+  target_organism: Homo sapiens
+  assay_format: cell
+  top_n: 10
+
+# Comprehensive molecular curation
+curate:
+  SMILES_column: canonical_smiles
+  mol_steps:
+    - desalt
+    - removeIsotope
+    - neutralize
+    - sanitize
+    - handleStereo
+    - computeProps
+  smiles_steps:
+    - canonical
+  stereo_policy: assign
+  dropna: true
+  check_duplicates: true
+
+# SMILES tokenization with dynamic vocabulary
+tokens:
+  SMILES_column: curated_smiles
+  vocab_file: null
+  dynamically_update_vocab: true
+
+# Distribution-based filtering with global statistical threshold
+distributions:
+  SMILES_column: curated_smiles
+  tokens_column: tokens
+  
+  # Apply 2-sigma rule to all properties
+  global_statistical_threshold: 2.0
+  
+  # Property computation
+  properties: all
+  compute_properties: true
+  dropna: true  # set false to keep all molecules and only flag pass/fail
+
+  # Token filtering
+  curate_tokens: true
+  filter_unknown_tokens: true
+  token_frequency_threshold: 1.0
+  
+  # Visualization
+  plot_distributions: true
+  perform_pca: true
+  
+
+output:
+  dir: ./distributions_output
+  format: csv
+  checkpoints: true

@@ -1,0 +1,58 @@
+# MolForge Conformer Generation Configuration
+# Complete pipeline from data acquisition to 3D conformer generation
+version: "1.0"
+
+steps:
+  - source
+  - chembl
+  - curate
+  - confs
+
+# ChEMBL data source - SQL backend for fast data retrieval
+source:
+  backend: sql
+  n: 1000
+  search_all: true
+  auto_download: true
+  download_dir: ./data/chembl
+  version: latest
+
+# ChEMBL activity curation - IC50 binding data
+chembl:
+  standard_type: IC50
+  standard_units: nM
+  standard_relation: "="
+  assay_type: B
+  target_organism: Homo sapiens
+  assay_format: protein
+  top_n: 5
+
+# Molecular structure curation with stereochemistry assignment
+curate:
+  SMILES_column: canonical_smiles
+  mol_steps:
+    - desalt
+    - neutralize
+    - sanitize
+    - handleStereo
+  stereo_policy: assign
+  dropna: true
+  check_duplicates: true
+
+# 3D conformer generation with RDKit
+confs:
+  backend: rdkit
+  SMILES_column: curated_smiles
+  names_column: molecule_chembl_id
+  max_confs: 200
+  rms_threshold: 0.5
+  use_random_coords: true
+  random_seed: 42
+  use_uff: true
+  max_iterations: 200
+  dropna: true
+
+output:
+  dir: ./conformers_output
+  format: csv
+  checkpoints: false
